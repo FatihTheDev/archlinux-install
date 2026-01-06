@@ -49,15 +49,23 @@ select_option() {
             echo "${options[$result]}"
         fi
     else
-        # Fallback to simple select
+        # Fallback to numbered list
         echo "$prompt" >&2
-        PS3="Select option: "
-        select opt in "${options[@]}"; do
-            if [[ -n "$opt" ]]; then
-                echo "$opt"
-                break
-            fi
+        local i=1
+        for opt in "${options[@]}"; do
+            echo "  $i) $opt" >&2
+            ((i++))
         done
+        echo -n "Enter choice [1-$((i-1))]: " >&2
+        local choice
+        if [[ -t 0 ]]; then
+            read choice
+        else
+            read choice < /dev/tty
+        fi
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 1 ]] && [[ "$choice" -lt $i ]]; then
+            echo "${options[$((choice-1))]}"
+        fi
     fi
 }
 
