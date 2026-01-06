@@ -1,0 +1,528 @@
+#!/bin/bash
+
+set -euo pipefail
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Check if running as root
+if [[ $EUID -ne 0 ]]; then
+   echo -e "${RED}This script must be run as root${NC}" 
+   exit 1
+fi
+
+# Check if we're in Arch Linux live environment
+if ! command_exists pacman; then
+    error_exit "This script must be run from Arch Linux live environment"
+fi
+
+# Check if /mnt is already mounted
+if mountpoint -q /mnt; then
+    echo -e "${YELLOW}Warning: /mnt is already mounted. Unmounting...${NC}"
+    umount -R /mnt 2>/dev/null || true
+fi
+
+# Function to display error and exit
+error_exit() {
+    echo -e "${RED}Error: $1${NC}" >&2
+    exit 1
+}
+
+# Function to check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+# Function to select from list using fzf or fallback to dialog
+select_option() {
+    local prompt="$1"
+    shift
+    local options=("$@")
+    local result
+    
+    if command_exists fzf; then
+        result=$(printf '%s\n' "${options[@]}" | fzf --prompt="$prompt: " --height=40% --reverse)
+        echo "$result"
+    elif command_exists dialog; then
+        local menu_items=()
+        local i=0
+        for opt in "${options[@]}"; do
+            menu_items+=("$i" "$opt")
+            ((i++))
+        done
+        result=$(dialog --stdout --menu "$prompt" 0 0 0 "${menu_items[@]}")
+        if [[ -n "$result" ]]; then
+            echo "${options[$result]}"
+        fi
+    else
+        # Fallback to simple select
+        echo "$prompt" >&2
+        PS3="Select option: "
+        select opt in "${options[@]}"; do
+            if [[ -n "$opt" ]]; then
+                echo "$opt"
+                break
+            fi
+        done
+    fi
+}
+
+# Function to get user input
+get_input() {
+    local prompt="$1"
+    local default="${2:-}"
+    local secret="${3:-false}"
+    local result
+    
+    if command_exists dialog; then
+        if [[ "$secret" == "true" ]]; then
+            result=$(dialog --stdout --insecure --passwordbox "$prompt" 0 0 "$default")
+        else
+            result=$(dialog --stdout --inputbox "$prompt" 0 0 "$default")
+        fi
+        echo "$result"
+    else
+        if [[ "$secret" == "true" ]]; then
+            read -sp "$prompt: " input
+            echo >&2
+            echo "$input"
+        else
+            read -p "$prompt: " input
+            echo "${input:-$default}"
+        fi
+    fi
+}
+
+# Function to get yes/no answer
+get_yesno() {
+    local prompt="$1"
+    
+    if command_exists dialog; then
+        dialog --yesno "$prompt" 0 0 2>&1 >/dev/tty
+        return $?
+    else
+        read -p "$prompt (y/n): " answer
+        [[ "$answer" =~ ^[Yy]$ ]]
+    fi
+}
+
+# Collect user information
+echo -e "${GREEN}=== Arch Linux Installation Script ===${NC}\n"
+
+# Root password
+ROOT_PASSWORD=$(get_input "Enter root password (leave empty to lock root account)" "" "true")
+if [[ -z "$ROOT_PASSWORD" ]]; then
+    LOCK_ROOT=true
+    echo -e "${YELLOW}Root account will be locked${NC}"
+else
+    LOCK_ROOT=false
+fi
+
+# Username
+USERNAME=$(get_input "Enter username")
+if [[ -z "$USERNAME" ]]; then
+    error_exit "Username cannot be empty"
+fi
+
+# User password
+USER_PASSWORD=$(get_input "Enter user password" "" "true")
+if [[ -z "$USER_PASSWORD" ]]; then
+    error_exit "User password cannot be empty"
+fi
+
+# Confirm password
+CONFIRM_PASSWORD=$(get_input "Confirm user password" "" "true")
+if [[ "$USER_PASSWORD" != "$CONFIRM_PASSWORD" ]]; then
+    error_exit "Passwords do not match"
+fi
+
+# Mirror selection
+echo -e "\n${GREEN}Selecting mirror...${NC}"
+MIRRORS=(
+    "United States (Fastly)"
+    "United States (Cloudflare)"
+    "Germany (TU Berlin)"
+    "Germany (RWTH Aachen)"
+    "United Kingdom (University of Kent)"
+    "France (iut)"
+    "Netherlands (Nluug)"
+    "Sweden (Pythonguides)"
+    "Japan (JAIST)"
+    "Custom mirror"
+)
+
+MIRROR_CHOICE=$(select_option "Select mirror" "${MIRRORS[@]}")
+if [[ -z "$MIRROR_CHOICE" ]]; then
+    error_exit "Mirror selection cancelled"
+fi
+case "$MIRROR_CHOICE" in
+    "United States (Fastly)")
+        MIRROR_URL="https://mirror.fastly.archlinux.org"
+        ;;
+    "United States (Cloudflare)")
+        MIRROR_URL="https://mirror.cloudflare.com/archlinux"
+        ;;
+    "Germany (TU Berlin)")
+        MIRROR_URL="https://mirror.tu-berlin.de/archlinux"
+        ;;
+    "Germany (RWTH Aachen)")
+        MIRROR_URL="https://ftp.halifax.rwth-aachen.de/archlinux"
+        ;;
+    "United Kingdom (University of Kent)")
+        MIRROR_URL="https://mirror.cs.kent.ac.uk/archlinux"
+        ;;
+    "France (iut)")
+        MIRROR_URL="https://mirror.archlinux.ikoula.com/archlinux"
+        ;;
+    "Netherlands (Nluug)")
+        MIRROR_URL="https://mirror.nluug.nl/archlinux"
+        ;;
+    "Sweden (Pythonguides)")
+        MIRROR_URL="https://mirror.pythonguides.org/archlinux"
+        ;;
+    "Japan (JAIST)")
+        MIRROR_URL="https://ftp.jaist.ac.jp/pub/Linux/ArchLinux"
+        ;;
+    "Custom mirror")
+        MIRROR_URL=$(get_input "Enter custom mirror URL")
+        ;;
+    *)
+        MIRROR_URL="https://geo.mirror.pkgbuild.com"
+        ;;
+esac
+
+# Disk selection
+echo -e "\n${GREEN}Detecting disks...${NC}"
+DISKS=($(lsblk -dno NAME | grep -E '^[sv]d[a-z]$|^nvme[0-9]+n[0-9]+$'))
+if [[ ${#DISKS[@]} -eq 0 ]]; then
+    error_exit "No disks found"
+fi
+
+DISK_OPTIONS=()
+for disk in "${DISKS[@]}"; do
+    SIZE=$(lsblk -bdno SIZE "/dev/$disk")
+    DISK_OPTIONS+=("$disk ($SIZE)")
+done
+
+SELECTED_DISK_OPTION=$(select_option "Select disk to install Arch Linux" "${DISK_OPTIONS[@]}")
+if [[ -z "$SELECTED_DISK_OPTION" ]]; then
+    error_exit "Disk selection cancelled"
+fi
+SELECTED_DISK=$(echo "$SELECTED_DISK_OPTION" | awk '{print $1}')
+DISK_PATH="/dev/$SELECTED_DISK"
+
+# Partitioning method
+PARTITION_METHOD=$(select_option "Select partitioning method" \
+    "Use entire disk" \
+    "Use remaining free space" \
+    "Manual partitioning (cfdisk)")
+if [[ -z "$PARTITION_METHOD" ]]; then
+    error_exit "Partitioning method selection cancelled"
+fi
+
+# GPU selection
+GPU_CHOICE=$(select_option "Select your GPU" \
+    "Intel" \
+    "AMD" \
+    "NVIDIA (newer)" \
+    "NVIDIA (older)")
+if [[ -z "$GPU_CHOICE" ]]; then
+    error_exit "GPU selection cancelled"
+fi
+
+# Printing support
+if get_yesno "Do you want printing support (CUPS)?"; then
+    INSTALL_CUPS=true
+else
+    INSTALL_CUPS=false
+fi
+
+# Confirmation
+echo -e "\n${YELLOW}=== Installation Summary ===${NC}"
+echo "Username: $USERNAME"
+echo "Root account: $([ "$LOCK_ROOT" = true ] && echo "Locked" || echo "Enabled")"
+echo "Disk: $DISK_PATH"
+echo "Partitioning: $PARTITION_METHOD"
+echo "GPU: $GPU_CHOICE"
+echo "Mirror: $MIRROR_URL"
+echo "Printing support: $([ "$INSTALL_CUPS" = true ] && echo "Yes" || echo "No")"
+echo ""
+
+if ! get_yesno "Proceed with installation?"; then
+    echo "Installation cancelled."
+    exit 0
+fi
+
+# Function to partition disk
+partition_disk() {
+    local disk="$1"
+    local method="$2"
+    
+    case "$method" in
+        "Use entire disk")
+            echo -e "${GREEN}Partitioning entire disk...${NC}"
+            # Create GPT partition table
+            parted -s "$disk" mklabel gpt
+            
+            # Create EFI partition (512MB)
+            parted -s "$disk" mkpart primary fat32 1MiB 513MiB
+            parted -s "$disk" set 1 esp on
+            EFI_PART="${disk}1"
+            
+            # Create root partition (rest of disk)
+            parted -s "$disk" mkpart primary btrfs 513MiB 100%
+            ROOT_PART="${disk}2"
+            ;;
+            
+        "Use remaining free space")
+            echo -e "${GREEN}Detecting free space...${NC}"
+            
+            # Check if disk has partition table
+            if ! parted -s "$disk" print &>/dev/null; then
+                error_exit "Disk has no partition table. Please use 'Use entire disk' option first."
+            fi
+            
+            # Get disk size and last partition end
+            DISK_SIZE=$(parted -s "$disk" unit MiB print | grep "^Disk" | awk '{print $3}' | sed 's/MiB//')
+            LAST_PART=$(parted -s "$disk" unit MiB print | grep -E '^[[:space:]]*[0-9]+' | tail -1)
+            if [[ -n "$LAST_PART" ]]; then
+                LAST_END=$(echo "$LAST_PART" | awk '{print $3}' | sed 's/MiB//')
+            else
+                LAST_END=1
+            fi
+            
+            START_POS=$((LAST_END + 1))
+            AVAILABLE_SPACE=$((DISK_SIZE - START_POS))
+            
+            if [[ $AVAILABLE_SPACE -lt 2048 ]]; then
+                error_exit "Not enough free space (need at least 2GB, found ${AVAILABLE_SPACE}MB)"
+            fi
+            
+            # Create EFI partition if it doesn't exist
+            if ! parted -s "$disk" print | grep -q "esp on"; then
+                EFI_START=$START_POS
+                EFI_END=$((START_POS + 512))
+                if [[ $EFI_END -gt $DISK_SIZE ]]; then
+                    error_exit "Not enough space for EFI partition"
+                fi
+                parted -s "$disk" mkpart primary fat32 "${EFI_START}MiB" "${EFI_END}MiB"
+                PART_NUM=$(parted -s "$disk" print | tail -1 | awk '{print $1}')
+                parted -s "$disk" set "$PART_NUM" esp on
+                START_POS=$EFI_END
+            fi
+            
+            # Create root partition in remaining space
+            if [[ $START_POS -ge $DISK_SIZE ]]; then
+                error_exit "No space left for root partition"
+            fi
+            parted -s "$disk" mkpart primary btrfs "${START_POS}MiB" 100%
+            ROOT_PART="${disk}$(parted -s "$disk" print | tail -1 | awk '{print $1}')"
+            
+            # Find EFI partition
+            EFI_PART_NUM=$(parted -s "$disk" print | grep "esp on" | awk '{print $1}')
+            if [[ -n "$EFI_PART_NUM" ]]; then
+                EFI_PART="${disk}${EFI_PART_NUM}"
+            fi
+            ;;
+            
+        "Manual partitioning (cfdisk)")
+            echo -e "${GREEN}Opening cfdisk for manual partitioning...${NC}"
+            echo "Please create:"
+            echo "1. An EFI partition (512MB, type EFI System)"
+            echo "2. A root partition (type Linux filesystem)"
+            echo "Press Enter to continue..."
+            read
+            cfdisk "$disk"
+            
+            # Wait a moment for partition table to update
+            sleep 2
+            partprobe "$disk" 2>/dev/null || true
+            
+            # Detect partitions
+            EFI_PART=$(lsblk -lnpo NAME,TYPE,PARTTYPE "$disk" | grep -i "c12a7328-f81f-11d2-ba4b-00a0c93ec93b" | awk '{print $1}' | head -1)
+            if [[ -z "$EFI_PART" ]]; then
+                # Fallback: find first FAT32 partition
+                EFI_PART=$(blkid -t TYPE=vfat -o device "$disk"* 2>/dev/null | head -1)
+            fi
+            
+            # Find root partition (largest non-EFI partition)
+            ROOT_PART=$(lsblk -lnpo NAME,SIZE,TYPE "$disk" | grep part | grep -v "$(basename "$EFI_PART")" | sort -k2 -h | tail -1 | awk '{print $1}')
+            
+            if [[ -z "$ROOT_PART" ]]; then
+                error_exit "Could not detect root partition. Please ensure you created a root partition."
+            fi
+            ;;
+    esac
+    
+    # Format EFI partition
+    if [[ -n "$EFI_PART" ]]; then
+        mkfs.fat -F32 "$EFI_PART" || error_exit "Failed to format EFI partition"
+    fi
+    
+    # Format root partition with Btrfs
+    mkfs.btrfs -f "$ROOT_PART" || error_exit "Failed to format root partition"
+    
+    # Mount root partition
+    mount "$ROOT_PART" /mnt || error_exit "Failed to mount root partition"
+    
+    # Create Btrfs subvolumes for timeshift
+    btrfs subvolume create /mnt/@
+    btrfs subvolume create /mnt/@home
+    btrfs subvolume create /mnt/@var
+    btrfs subvolume create /mnt/@snapshots
+    btrfs subvolume create /mnt/@tmp
+    
+    # Unmount to remount with subvolumes
+    umount /mnt
+    
+    # Mount with subvolumes
+    mount -o subvol=@,compress=zstd:1,noatime "$ROOT_PART" /mnt
+    mkdir -p /mnt/{home,var,tmp,.snapshots,boot/efi}
+    mount -o subvol=@home,compress=zstd:1,noatime "$ROOT_PART" /mnt/home
+    mount -o subvol=@var,compress=zstd:1,noatime "$ROOT_PART" /mnt/var
+    mount -o subvol=@tmp,compress=zstd:1,noatime "$ROOT_PART" /mnt/tmp
+    mount -o subvol=@snapshots,compress=zstd:1,noatime "$ROOT_PART" /mnt/.snapshots
+    
+    # Mount EFI partition
+    if [[ -n "$EFI_PART" ]] && [[ -e "$EFI_PART" ]]; then
+        mount "$EFI_PART" /mnt/boot/efi || error_exit "Failed to mount EFI partition"
+    else
+        echo -e "${YELLOW}Warning: No EFI partition found. Bootloader installation may fail.${NC}"
+    fi
+}
+
+# Configure mirror
+echo -e "${GREEN}Configuring mirror...${NC}"
+if ! grep -q "^Server = $MIRROR_URL" /etc/pacman.d/mirrorlist 2>/dev/null; then
+    # Backup original mirrorlist
+    cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.backup
+    # Add selected mirror at the top
+    echo "Server = $MIRROR_URL/\$repo/os/\$arch" > /tmp/mirrorlist.new
+    cat /etc/pacman.d/mirrorlist >> /tmp/mirrorlist.new
+    mv /tmp/mirrorlist.new /etc/pacman.d/mirrorlist
+fi
+
+# Partition disk
+partition_disk "$DISK_PATH" "$PARTITION_METHOD"
+
+# Install base system
+echo -e "${GREEN}Installing base system...${NC}"
+pacstrap /mnt base base-devel linux linux-firmware btrfs-progs
+
+# Generate fstab
+echo -e "${GREEN}Generating fstab...${NC}"
+genfstab -U /mnt >> /mnt/etc/fstab
+
+# Configure zram swap
+echo -e "${GREEN}Configuring zram swap...${NC}"
+arch-chroot /mnt pacman -S --noconfirm systemd-zram-generator
+cat > /mnt/etc/systemd/zram-generator.conf <<EOF
+[zram0]
+zram-size = ram / 2
+compression-algorithm = zstd
+swap-priority = 100
+EOF
+arch-chroot /mnt systemctl enable systemd-zram-setup@zram0.service
+
+# Install GPU drivers
+echo -e "${GREEN}Installing GPU drivers...${NC}"
+case "$GPU_CHOICE" in
+    "Intel")
+        arch-chroot /mnt pacman -S --noconfirm \
+            mesa vulkan-intel intel-media-driver libva-intel-driver \
+            intel-gpu-tools
+        ;;
+    "AMD")
+        arch-chroot /mnt pacman -S --noconfirm \
+            mesa vulkan-radeon libva-mesa-driver radeon-profile \
+            radeon-profile-daemon-git
+        ;;
+    "NVIDIA (newer)")
+        arch-chroot /mnt pacman -S --noconfirm \
+            nvidia-open-dkms nvidia-utils lib32-nvidia-utils \
+            nvidia-settings opencl-nvidia lib32-opencl-nvidia
+        ;;
+    "NVIDIA (older)")
+        # Install nvidia driver (non-DKMS version for older cards)
+        arch-chroot /mnt pacman -S --noconfirm \
+            nvidia nvidia-utils lib32-nvidia-utils \
+            nvidia-settings opencl-nvidia lib32-opencl-nvidia
+        ;;
+esac
+
+# Install NetworkManager
+echo -e "${GREEN}Installing NetworkManager...${NC}"
+arch-chroot /mnt pacman -S --noconfirm \
+    networkmanager network-manager-applet nm-connection-editor \
+    networkmanager-openvpn networkmanager-vpnc networkmanager-pptp
+
+# Install CUPS if requested
+if [[ "$INSTALL_CUPS" == "true" ]]; then
+    echo -e "${GREEN}Installing CUPS...${NC}"
+    arch-chroot /mnt pacman -S --noconfirm cups cups-pdf
+    arch-chroot /mnt systemctl enable cups.service
+fi
+
+# Configure system
+echo -e "${GREEN}Configuring system...${NC}"
+
+# Set timezone
+arch-chroot /mnt ln -sf /usr/share/zoneinfo/UTC /etc/localtime
+arch-chroot /mnt hwclock --systohc
+
+# Configure locale
+echo "en_US.UTF-8 UTF-8" >> /mnt/etc/locale.gen
+arch-chroot /mnt locale-gen
+echo "LANG=en_US.UTF-8" > /mnt/etc/locale.conf
+
+# Set hostname
+echo "archlinux" > /mnt/etc/hostname
+
+# Configure hosts file
+cat > /mnt/etc/hosts <<EOF
+127.0.0.1	localhost
+::1		localhost
+127.0.1.1	archlinux.localdomain	archlinux
+EOF
+
+# Create user
+echo -e "${GREEN}Creating user...${NC}"
+arch-chroot /mnt useradd -m -G wheel -s /bin/bash "$USERNAME"
+echo "$USERNAME:$USER_PASSWORD" | arch-chroot /mnt chpasswd
+
+# Configure sudo
+echo "%wheel ALL=(ALL:ALL) ALL" >> /mnt/etc/sudoers
+
+# Configure root password
+if [[ "$LOCK_ROOT" == "true" ]]; then
+    arch-chroot /mnt passwd -l root
+else
+    echo "root:$ROOT_PASSWORD" | arch-chroot /mnt chpasswd
+fi
+
+# Enable NetworkManager
+arch-chroot /mnt systemctl enable NetworkManager.service
+
+# Install bootloader (GRUB)
+echo -e "${GREEN}Installing bootloader...${NC}"
+arch-chroot /mnt pacman -S --noconfirm grub efibootmgr
+if [[ -n "$EFI_PART" ]] && [[ -e "$EFI_PART" ]]; then
+    arch-chroot /mnt grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
+else
+    echo -e "${YELLOW}Warning: EFI partition not found. Installing GRUB for BIOS...${NC}"
+    arch-chroot /mnt grub-install --target=i386-pc "$DISK_PATH"
+fi
+arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+
+# Configure mkinitcpio for Btrfs
+sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf kms keyboard keymap consolefont block filesystems btrfs fsck)/' /mnt/etc/mkinitcpio.conf
+arch-chroot /mnt mkinitcpio -P
+
+echo -e "\n${GREEN}=== Installation Complete! ===${NC}"
+echo "You can now reboot into your new Arch Linux installation."
+echo "Remember to:"
+echo "1. Unmount: umount -R /mnt"
+echo "2. Reboot: reboot"
