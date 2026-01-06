@@ -8,6 +8,17 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# Function to display error and exit
+error_exit() {
+    echo -e "${RED}Error: $1${NC}" >&2
+    exit 1
+}
+
+# Function to check if command exists
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
 # Check if running as root
 if [[ $EUID -ne 0 ]]; then
    echo -e "${RED}This script must be run as root${NC}" 
@@ -24,17 +35,6 @@ if mountpoint -q /mnt; then
     echo -e "${YELLOW}Warning: /mnt is already mounted. Unmounting...${NC}"
     umount -R /mnt 2>/dev/null || true
 fi
-
-# Function to display error and exit
-error_exit() {
-    echo -e "${RED}Error: $1${NC}" >&2
-    exit 1
-}
-
-# Function to check if command exists
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
 
 # Function to select from list using fzf or fallback to dialog
 select_option() {
