@@ -8,17 +8,6 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Function to display error and exit
-error_exit() {
-    echo -e "${RED}Error: $1${NC}" >&2
-    exit 1
-}
-
-# Function to check if command exists
-command_exists() {
-    command -v "$1" >/dev/null 2>&1
-}
-
 # Check if running as root
 if [[ $EUID -ne 0 ]]; then
    echo -e "${RED}This script must be run as root${NC}" 
@@ -26,8 +15,9 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # Check if we're in Arch Linux live environment
-if ! command_exists pacman; then
-    error_exit "This script must be run from Arch Linux live environment"
+if ! command -v pacman >/dev/null 2>&1; then
+    echo -e "${RED}Error: This script must be run from Arch Linux live environment${NC}" >&2
+    exit 1
 fi
 
 # Check if /mnt is already mounted
@@ -43,10 +33,10 @@ select_option() {
     local options=("$@")
     local result
     
-    if command_exists fzf; then
+    if command -v fzf >/dev/null 2>&1; then
         result=$(printf '%s\n' "${options[@]}" | fzf --prompt="$prompt: " --height=40% --reverse)
         echo "$result"
-    elif command_exists dialog; then
+    elif command -v dialog >/dev/null 2>&1; then
         local menu_items=()
         local i=0
         for opt in "${options[@]}"; do
@@ -77,7 +67,7 @@ get_input() {
     local secret="${3:-false}"
     local result
     
-    if command_exists dialog; then
+    if command -v dialog >/dev/null 2>&1; then
         if [[ "$secret" == "true" ]]; then
             result=$(dialog --stdout --insecure --passwordbox "$prompt" 0 0 "$default")
         else
@@ -100,7 +90,7 @@ get_input() {
 get_yesno() {
     local prompt="$1"
     
-    if command_exists dialog; then
+    if command -v dialog >/dev/null 2>&1; then
         dialog --yesno "$prompt" 0 0 2>&1 >/dev/tty
         return $?
     else
@@ -124,19 +114,22 @@ fi
 # Username
 USERNAME=$(get_input "Enter username")
 if [[ -z "$USERNAME" ]]; then
-    error_exit "Username cannot be empty"
+    echo -e "${RED}Error: Username cannot be empty${NC}" >&2
+    exit 1
 fi
 
 # User password
 USER_PASSWORD=$(get_input "Enter user password" "" "true")
 if [[ -z "$USER_PASSWORD" ]]; then
-    error_exit "User password cannot be empty"
+    echo -e "${RED}Error: User password cannot be empty${NC}" >&2
+    exit 1
 fi
 
 # Confirm password
 CONFIRM_PASSWORD=$(get_input "Confirm user password" "" "true")
 if [[ "$USER_PASSWORD" != "$CONFIRM_PASSWORD" ]]; then
-    error_exit "Passwords do not match"
+    echo -e "${RED}Error: Passwords do not match${NC}" >&2
+    exit 1
 fi
 
 # Mirror selection
@@ -156,7 +149,8 @@ MIRRORS=(
 
 MIRROR_CHOICE=$(select_option "Select mirror" "${MIRRORS[@]}")
 if [[ -z "$MIRROR_CHOICE" ]]; then
-    error_exit "Mirror selection cancelled"
+    echo -e "${RED}Error: Mirror selection cancelled${NC}" >&2
+    exit 1
 fi
 case "$MIRROR_CHOICE" in
     "United States (Fastly)")
@@ -198,7 +192,8 @@ esac
 echo -e "\n${GREEN}Detecting disks...${NC}"
 DISKS=($(lsblk -dno NAME | grep -E '^[sv]d[a-z]$|^nvme[0-9]+n[0-9]+$'))
 if [[ ${#DISKS[@]} -eq 0 ]]; then
-    error_exit "No disks found"
+    echo -e "${RED}Error: No disks found${NC}" >&2
+    exit 1
 fi
 
 DISK_OPTIONS=()
@@ -209,7 +204,8 @@ done
 
 SELECTED_DISK_OPTION=$(select_option "Select disk to install Arch Linux" "${DISK_OPTIONS[@]}")
 if [[ -z "$SELECTED_DISK_OPTION" ]]; then
-    error_exit "Disk selection cancelled"
+    echo -e "${RED}Error: Disk selection cancelled${NC}" >&2
+    exit 1
 fi
 SELECTED_DISK=$(echo "$SELECTED_DISK_OPTION" | awk '{print $1}')
 DISK_PATH="/dev/$SELECTED_DISK"
@@ -220,7 +216,8 @@ PARTITION_METHOD=$(select_option "Select partitioning method" \
     "Use remaining free space" \
     "Manual partitioning (cfdisk)")
 if [[ -z "$PARTITION_METHOD" ]]; then
-    error_exit "Partitioning method selection cancelled"
+    echo -e "${RED}Error: Partitioning method selection cancelled${NC}" >&2
+    exit 1
 fi
 
 # GPU selection
@@ -230,7 +227,8 @@ GPU_CHOICE=$(select_option "Select your GPU" \
     "NVIDIA (newer)" \
     "NVIDIA (older)")
 if [[ -z "$GPU_CHOICE" ]]; then
-    error_exit "GPU selection cancelled"
+    echo -e "${RED}Error: GPU selection cancelled${NC}" >&2
+    exit 1
 fi
 
 # Printing support
@@ -282,7 +280,8 @@ partition_disk() {
             
             # Check if disk has partition table
             if ! parted -s "$disk" print &>/dev/null; then
-                error_exit "Disk has no partition table. Please use 'Use entire disk' option first."
+                echo -e "${RED}Error: Disk has no partition table. Please use 'Use entire disk' option first.${NC}" >&2
+                exit 1
             fi
             
             # Get disk size and last partition end
@@ -298,7 +297,8 @@ partition_disk() {
             AVAILABLE_SPACE=$((DISK_SIZE - START_POS))
             
             if [[ $AVAILABLE_SPACE -lt 2048 ]]; then
-                error_exit "Not enough free space (need at least 2GB, found ${AVAILABLE_SPACE}MB)"
+                echo -e "${RED}Error: Not enough free space (need at least 2GB, found ${AVAILABLE_SPACE}MB)${NC}" >&2
+                exit 1
             fi
             
             # Create EFI partition if it doesn't exist
@@ -306,7 +306,8 @@ partition_disk() {
                 EFI_START=$START_POS
                 EFI_END=$((START_POS + 512))
                 if [[ $EFI_END -gt $DISK_SIZE ]]; then
-                    error_exit "Not enough space for EFI partition"
+                    echo -e "${RED}Error: Not enough space for EFI partition${NC}" >&2
+                    exit 1
                 fi
                 parted -s "$disk" mkpart primary fat32 "${EFI_START}MiB" "${EFI_END}MiB"
                 PART_NUM=$(parted -s "$disk" print | tail -1 | awk '{print $1}')
@@ -316,7 +317,8 @@ partition_disk() {
             
             # Create root partition in remaining space
             if [[ $START_POS -ge $DISK_SIZE ]]; then
-                error_exit "No space left for root partition"
+                echo -e "${RED}Error: No space left for root partition${NC}" >&2
+                exit 1
             fi
             parted -s "$disk" mkpart primary btrfs "${START_POS}MiB" 100%
             ROOT_PART="${disk}$(parted -s "$disk" print | tail -1 | awk '{print $1}')"
@@ -352,21 +354,31 @@ partition_disk() {
             ROOT_PART=$(lsblk -lnpo NAME,SIZE,TYPE "$disk" | grep part | grep -v "$(basename "$EFI_PART")" | sort -k2 -h | tail -1 | awk '{print $1}')
             
             if [[ -z "$ROOT_PART" ]]; then
-                error_exit "Could not detect root partition. Please ensure you created a root partition."
+                echo -e "${RED}Error: Could not detect root partition. Please ensure you created a root partition.${NC}" >&2
+                exit 1
             fi
             ;;
     esac
     
     # Format EFI partition
     if [[ -n "$EFI_PART" ]]; then
-        mkfs.fat -F32 "$EFI_PART" || error_exit "Failed to format EFI partition"
+        if ! mkfs.fat -F32 "$EFI_PART"; then
+            echo -e "${RED}Error: Failed to format EFI partition${NC}" >&2
+            exit 1
+        fi
     fi
     
     # Format root partition with Btrfs
-    mkfs.btrfs -f "$ROOT_PART" || error_exit "Failed to format root partition"
+    if ! mkfs.btrfs -f "$ROOT_PART"; then
+        echo -e "${RED}Error: Failed to format root partition${NC}" >&2
+        exit 1
+    fi
     
     # Mount root partition
-    mount "$ROOT_PART" /mnt || error_exit "Failed to mount root partition"
+    if ! mount "$ROOT_PART" /mnt; then
+        echo -e "${RED}Error: Failed to mount root partition${NC}" >&2
+        exit 1
+    fi
     
     # Create Btrfs subvolumes for timeshift
     btrfs subvolume create /mnt/@
@@ -388,7 +400,10 @@ partition_disk() {
     
     # Mount EFI partition
     if [[ -n "$EFI_PART" ]] && [[ -e "$EFI_PART" ]]; then
-        mount "$EFI_PART" /mnt/boot/efi || error_exit "Failed to mount EFI partition"
+        if ! mount "$EFI_PART" /mnt/boot/efi; then
+            echo -e "${RED}Error: Failed to mount EFI partition${NC}" >&2
+            exit 1
+        fi
     else
         echo -e "${YELLOW}Warning: No EFI partition found. Bootloader installation may fail.${NC}"
     fi
