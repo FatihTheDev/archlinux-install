@@ -182,82 +182,7 @@ if [[ "$USER_PASSWORD" != "$CONFIRM_PASSWORD" ]]; then
     exit 1
 fi
 
-# Mirror selection
-echo -e "\n${GREEN}Selecting mirror...${NC}"
-
-# Comprehensive mirror list organized by country
-declare -A MIRROR_MAP
-MIRROR_MAP["United States - Fastly"]="https://mirror.fastly.archlinux.org"
-MIRROR_MAP["United States - Cloudflare"]="https://mirror.cloudflare.com/archlinux"
-MIRROR_MAP["United States - MIT"]="https://mirrors.mit.edu/archlinux"
-MIRROR_MAP["United States - Georgia Tech"]="https://mirror.math.princeton.edu/pub/archlinux"
-MIRROR_MAP["Germany - TU Berlin"]="https://mirror.tu-berlin.de/archlinux"
-MIRROR_MAP["Germany - RWTH Aachen"]="https://ftp.halifax.rwth-aachen.de/archlinux"
-MIRROR_MAP["Germany - Munich"]="https://mirror.metanet.ch/archlinux"
-MIRROR_MAP["United Kingdom - Kent"]="https://mirror.cs.kent.ac.uk/archlinux"
-MIRROR_MAP["United Kingdom - Manchester"]="https://mirror.bytemark.co.uk/archlinux"
-MIRROR_MAP["France - iut"]="https://mirror.archlinux.ikoula.com/archlinux"
-MIRROR_MAP["France - Gandi"]="https://mirror.gandi.net/pub/archlinux"
-MIRROR_MAP["Netherlands - Nluug"]="https://mirror.nluug.nl/archlinux"
-MIRROR_MAP["Netherlands - Leaseweb"]="https://mirror.leaseweb.com/archlinux"
-MIRROR_MAP["Sweden - Pythonguides"]="https://mirror.pythonguides.org/archlinux"
-MIRROR_MAP["Sweden - Academic Computer Club"]="https://ftp.acc.umu.se/mirror/archlinux"
-MIRROR_MAP["Japan - JAIST"]="https://ftp.jaist.ac.jp/pub/Linux/ArchLinux"
-MIRROR_MAP["Japan - Tsukuba"]="https://mirror.tsukuba.wide.ad.jp/archlinux"
-MIRROR_MAP["Canada - Montreal"]="https://mirror.csclub.uwaterloo.ca/archlinux"
-MIRROR_MAP["Australia - AARNet"]="https://mirror.aarnet.edu.au/pub/archlinux"
-MIRROR_MAP["Australia - Internode"]="https://mirror.internode.on.net/pub/archlinux"
-MIRROR_MAP["Brazil - USP"]="https://archlinux.c3sl.ufpr.br"
-MIRROR_MAP["Brazil - UFRJ"]="https://mirror.ufscar.br/archlinux"
-MIRROR_MAP["China - TUNA"]="https://mirrors.tuna.tsinghua.edu.cn/archlinux"
-MIRROR_MAP["China - USTC"]="https://mirrors.ustc.edu.cn/archlinux"
-MIRROR_MAP["South Korea - KAIST"]="https://mirror.kakao.com/archlinux"
-MIRROR_MAP["South Korea - Seoul"]="https://ftp.harukasan.org/archlinux"
-MIRROR_MAP["Singapore - 0x"]="https://mirror.0x.sg/archlinux"
-MIRROR_MAP["India - IIT Bombay"]="https://mirror.cse.iitk.ac.in/archlinux"
-MIRROR_MAP["Russia - Yandex"]="https://mirror.yandex.ru/archlinux"
-MIRROR_MAP["Poland - AGH"]="https://mirror.agh.edu.pl/archlinux"
-MIRROR_MAP["Czech Republic - CZ.NIC"]="https://mirror.dkm.cz/archlinux"
-MIRROR_MAP["Italy - GARR"]="https://mirror.garr.it/mirrors/archlinux"
-MIRROR_MAP["Spain - RedIRIS"]="https://ftp.rediris.es/mirror/archlinux"
-MIRROR_MAP["Switzerland - SWITCH"]="https://mirror.switch.ch/ftp/mirror/archlinux"
-MIRROR_MAP["Austria - TU Graz"]="https://mirror.tugraz.at/archlinux"
-MIRROR_MAP["Denmark - Aalborg"]="https://mirrors.dotsrc.org/archlinux"
-MIRROR_MAP["Norway - UiO"]="https://mirror.uio.no/archlinux"
-MIRROR_MAP["Finland - Tampere"]="https://mirror.archlinux.fi/archlinux"
-MIRROR_MAP["Custom mirror"]="CUSTOM"
-
-# Create array of mirror names for selection
-MIRROR_NAMES=("${!MIRROR_MAP[@]}")
-
-# Use fzf to select mirror (searchable by country)
-if command -v fzf >/dev/null 2>&1; then
-    MIRROR_CHOICE=$(printf '%s\n' "${MIRROR_NAMES[@]}" | fzf --prompt="Search and select mirror (type country name): " --height=50% --reverse --border)
-else
-    MIRROR_CHOICE=$(select_option "Select mirror" "${MIRROR_NAMES[@]}")
-fi
-
-if [[ -z "$MIRROR_CHOICE" ]]; then
-    echo -e "${RED}Error: Mirror selection cancelled${NC}" >&2
-    exit 1
-fi
-
-# Get mirror URL
-if [[ "${MIRROR_MAP[$MIRROR_CHOICE]}" == "CUSTOM" ]]; then
-    echo -n "Enter custom mirror URL: "
-    if [[ -t 0 ]]; then
-        read MIRROR_URL
-    else
-        read MIRROR_URL < /dev/tty
-    fi
-else
-    MIRROR_URL="${MIRROR_MAP[$MIRROR_CHOICE]}"
-fi
-
-if [[ -z "$MIRROR_URL" ]]; then
-    echo -e "${RED}Error: Invalid mirror URL${NC}" >&2
-    exit 1
-fi
+# Mirror selection will be done automatically with reflector
 
 # Disk selection
 echo -e "\n${GREEN}Detecting disks...${NC}"
@@ -316,7 +241,7 @@ echo "Root account: $([ "$LOCK_ROOT" = true ] && echo "Locked" || echo "Enabled"
 echo "Disk: $DISK_PATH"
 echo "Partitioning: $PARTITION_METHOD"
 echo "GPU: $GPU_CHOICE"
-echo "Mirror: $MIRROR_URL"
+echo "Mirror: Auto-selected (fastest available)"
 echo "Printing support: $([ "$INSTALL_CUPS" = true ] && echo "Yes" || echo "No")"
 echo ""
 
@@ -484,15 +409,25 @@ partition_disk() {
     fi
 }
 
-# Configure mirror
-echo -e "${GREEN}Configuring mirror...${NC}"
-if ! grep -q "^Server = $MIRROR_URL" /etc/pacman.d/mirrorlist 2>/dev/null; then
-    # Backup original mirrorlist
-    cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.backup
-    # Add selected mirror at the top
-    echo "Server = $MIRROR_URL/\$repo/os/\$arch" > /tmp/mirrorlist.new
-    cat /etc/pacman.d/mirrorlist >> /tmp/mirrorlist.new
-    mv /tmp/mirrorlist.new /etc/pacman.d/mirrorlist
+# Configure mirror using reflector
+echo -e "${GREEN}Configuring mirror with reflector (selecting fastest mirrors)...${NC}"
+# Install reflector if not available
+if ! command -v reflector >/dev/null 2>&1; then
+    pacman -Sy --noconfirm reflector 2>/dev/null || echo -e "${YELLOW}Warning: Could not install reflector${NC}"
+fi
+
+# Backup original mirrorlist
+cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.backup
+
+# Use reflector to get fastest mirrors
+# Options: --latest 20 (latest 10 mirrors), --sort rate (sort by download rate), --protocol https (HTTPS only)
+if command -v reflector >/dev/null 2>&1; then
+    reflector --latest 10 --sort rate --protocol https --save /etc/pacman.d/mirrorlist --verbose 2>/dev/null || {
+        echo -e "${YELLOW}Warning: Reflector failed, using default mirrorlist${NC}"
+        cp /etc/pacman.d/mirrorlist.backup /etc/pacman.d/mirrorlist
+    }
+else
+    echo -e "${YELLOW}Warning: Reflector not available, using default mirrorlist${NC}"
 fi
 
 # Partition disk
