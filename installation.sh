@@ -1,6 +1,7 @@
 #!/bin/bash
 
-set -euo pipefail
+set -e
+set -o pipefail
 
 # Colors for output
 RED='\033[0;31m'
@@ -76,11 +77,19 @@ get_input() {
         echo "$result"
     else
         if [[ "$secret" == "true" ]]; then
-            read -sp "$prompt: " input < /dev/tty 2>/dev/null || read -sp "$prompt: " input
+            if [[ -t 0 ]]; then
+                read -sp "$prompt: " input
+            else
+                read -sp "$prompt: " input < /dev/tty
+            fi
             echo >&2
             echo "$input"
         else
-            read -p "$prompt: " input < /dev/tty 2>/dev/null || read -p "$prompt: " input
+            if [[ -t 0 ]]; then
+                read -p "$prompt: " input
+            else
+                read -p "$prompt: " input < /dev/tty
+            fi
             echo "${input:-$default}"
         fi
     fi
@@ -94,7 +103,11 @@ get_yesno() {
         dialog --yesno "$prompt" 0 0 2>&1 >/dev/tty
         return $?
     else
-        read -p "$prompt (y/n): " answer < /dev/tty 2>/dev/null || read -p "$prompt (y/n): " answer
+        if [[ -t 0 ]]; then
+            read -p "$prompt (y/n): " answer
+        else
+            read -p "$prompt (y/n): " answer < /dev/tty
+        fi
         [[ "$answer" =~ ^[Yy]$ ]]
     fi
 }
@@ -104,7 +117,11 @@ echo -e "${GREEN}=== Arch Linux Installation Script ===${NC}\n"
 
 # Root password
 echo -n "Enter root password (leave empty to lock root account): "
-read -s ROOT_PASSWORD < /dev/tty 2>/dev/null || read -s ROOT_PASSWORD
+if [[ -t 0 ]]; then
+    read -s ROOT_PASSWORD
+else
+    read -s ROOT_PASSWORD < /dev/tty
+fi
 echo ""
 if [[ -z "$ROOT_PASSWORD" ]]; then
     LOCK_ROOT=true
@@ -115,7 +132,11 @@ fi
 
 # Username
 echo -n "Enter username: "
-read USERNAME < /dev/tty 2>/dev/null || read USERNAME
+if [[ -t 0 ]]; then
+    read USERNAME
+else
+    read USERNAME < /dev/tty
+fi
 if [[ -z "$USERNAME" ]]; then
     echo -e "${RED}Error: Username cannot be empty${NC}" >&2
     exit 1
@@ -123,7 +144,11 @@ fi
 
 # User password
 echo -n "Enter user password: "
-read -s USER_PASSWORD < /dev/tty 2>/dev/null || read -s USER_PASSWORD
+if [[ -t 0 ]]; then
+    read -s USER_PASSWORD
+else
+    read -s USER_PASSWORD < /dev/tty
+fi
 echo ""
 if [[ -z "$USER_PASSWORD" ]]; then
     echo -e "${RED}Error: User password cannot be empty${NC}" >&2
@@ -132,7 +157,11 @@ fi
 
 # Confirm password
 echo -n "Confirm user password: "
-read -s CONFIRM_PASSWORD < /dev/tty 2>/dev/null || read -s CONFIRM_PASSWORD
+if [[ -t 0 ]]; then
+    read -s CONFIRM_PASSWORD
+else
+    read -s CONFIRM_PASSWORD < /dev/tty
+fi
 echo ""
 if [[ "$USER_PASSWORD" != "$CONFIRM_PASSWORD" ]]; then
     echo -e "${RED}Error: Passwords do not match${NC}" >&2
@@ -189,7 +218,11 @@ case "$MIRROR_CHOICE" in
         ;;
     "Custom mirror")
         echo -n "Enter custom mirror URL: "
-        read MIRROR_URL < /dev/tty 2>/dev/null || read MIRROR_URL
+        if [[ -t 0 ]]; then
+            read MIRROR_URL
+        else
+            read MIRROR_URL < /dev/tty
+        fi
         ;;
     *)
         MIRROR_URL="https://geo.mirror.pkgbuild.com"
@@ -344,7 +377,11 @@ partition_disk() {
             echo "1. An EFI partition (512MB, type EFI System)"
             echo "2. A root partition (type Linux filesystem)"
             echo "Press Enter to continue..."
-            read < /dev/tty 2>/dev/null || read
+            if [[ -t 0 ]]; then
+                read
+            else
+                read < /dev/tty
+            fi
             cfdisk "$disk"
             
             # Wait a moment for partition table to update
