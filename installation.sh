@@ -27,6 +27,12 @@ if mountpoint -q /mnt; then
     umount -R /mnt 2>/dev/null || true
 fi
 
+# Install fzf for better selection interface
+echo -e "${GREEN}Installing fzf for interactive selection...${NC}"
+if ! command -v fzf >/dev/null 2>&1; then
+    pacman -Sy --noconfirm fzf 2>/dev/null || echo -e "${YELLOW}Warning: Could not install fzf, will use fallback${NC}"
+fi
+
 # Function to select from list using fzf or fallback to dialog
 select_option() {
     local prompt="$1"
@@ -178,64 +184,80 @@ fi
 
 # Mirror selection
 echo -e "\n${GREEN}Selecting mirror...${NC}"
-MIRRORS=(
-    "United States (Fastly)"
-    "United States (Cloudflare)"
-    "Germany (TU Berlin)"
-    "Germany (RWTH Aachen)"
-    "United Kingdom (University of Kent)"
-    "France (iut)"
-    "Netherlands (Nluug)"
-    "Sweden (Pythonguides)"
-    "Japan (JAIST)"
-    "Custom mirror"
-)
 
-MIRROR_CHOICE=$(select_option "Select mirror" "${MIRRORS[@]}")
+# Comprehensive mirror list organized by country
+declare -A MIRROR_MAP
+MIRROR_MAP["United States - Fastly"]="https://mirror.fastly.archlinux.org"
+MIRROR_MAP["United States - Cloudflare"]="https://mirror.cloudflare.com/archlinux"
+MIRROR_MAP["United States - MIT"]="https://mirrors.mit.edu/archlinux"
+MIRROR_MAP["United States - Georgia Tech"]="https://mirror.math.princeton.edu/pub/archlinux"
+MIRROR_MAP["Germany - TU Berlin"]="https://mirror.tu-berlin.de/archlinux"
+MIRROR_MAP["Germany - RWTH Aachen"]="https://ftp.halifax.rwth-aachen.de/archlinux"
+MIRROR_MAP["Germany - Munich"]="https://mirror.metanet.ch/archlinux"
+MIRROR_MAP["United Kingdom - Kent"]="https://mirror.cs.kent.ac.uk/archlinux"
+MIRROR_MAP["United Kingdom - Manchester"]="https://mirror.bytemark.co.uk/archlinux"
+MIRROR_MAP["France - iut"]="https://mirror.archlinux.ikoula.com/archlinux"
+MIRROR_MAP["France - Gandi"]="https://mirror.gandi.net/pub/archlinux"
+MIRROR_MAP["Netherlands - Nluug"]="https://mirror.nluug.nl/archlinux"
+MIRROR_MAP["Netherlands - Leaseweb"]="https://mirror.leaseweb.com/archlinux"
+MIRROR_MAP["Sweden - Pythonguides"]="https://mirror.pythonguides.org/archlinux"
+MIRROR_MAP["Sweden - Academic Computer Club"]="https://ftp.acc.umu.se/mirror/archlinux"
+MIRROR_MAP["Japan - JAIST"]="https://ftp.jaist.ac.jp/pub/Linux/ArchLinux"
+MIRROR_MAP["Japan - Tsukuba"]="https://mirror.tsukuba.wide.ad.jp/archlinux"
+MIRROR_MAP["Canada - Montreal"]="https://mirror.csclub.uwaterloo.ca/archlinux"
+MIRROR_MAP["Australia - AARNet"]="https://mirror.aarnet.edu.au/pub/archlinux"
+MIRROR_MAP["Australia - Internode"]="https://mirror.internode.on.net/pub/archlinux"
+MIRROR_MAP["Brazil - USP"]="https://archlinux.c3sl.ufpr.br"
+MIRROR_MAP["Brazil - UFRJ"]="https://mirror.ufscar.br/archlinux"
+MIRROR_MAP["China - TUNA"]="https://mirrors.tuna.tsinghua.edu.cn/archlinux"
+MIRROR_MAP["China - USTC"]="https://mirrors.ustc.edu.cn/archlinux"
+MIRROR_MAP["South Korea - KAIST"]="https://mirror.kakao.com/archlinux"
+MIRROR_MAP["South Korea - Seoul"]="https://ftp.harukasan.org/archlinux"
+MIRROR_MAP["Singapore - 0x"]="https://mirror.0x.sg/archlinux"
+MIRROR_MAP["India - IIT Bombay"]="https://mirror.cse.iitk.ac.in/archlinux"
+MIRROR_MAP["Russia - Yandex"]="https://mirror.yandex.ru/archlinux"
+MIRROR_MAP["Poland - AGH"]="https://mirror.agh.edu.pl/archlinux"
+MIRROR_MAP["Czech Republic - CZ.NIC"]="https://mirror.dkm.cz/archlinux"
+MIRROR_MAP["Italy - GARR"]="https://mirror.garr.it/mirrors/archlinux"
+MIRROR_MAP["Spain - RedIRIS"]="https://ftp.rediris.es/mirror/archlinux"
+MIRROR_MAP["Switzerland - SWITCH"]="https://mirror.switch.ch/ftp/mirror/archlinux"
+MIRROR_MAP["Austria - TU Graz"]="https://mirror.tugraz.at/archlinux"
+MIRROR_MAP["Denmark - Aalborg"]="https://mirrors.dotsrc.org/archlinux"
+MIRROR_MAP["Norway - UiO"]="https://mirror.uio.no/archlinux"
+MIRROR_MAP["Finland - Tampere"]="https://mirror.archlinux.fi/archlinux"
+MIRROR_MAP["Custom mirror"]="CUSTOM"
+
+# Create array of mirror names for selection
+MIRROR_NAMES=("${!MIRROR_MAP[@]}")
+
+# Use fzf to select mirror (searchable by country)
+if command -v fzf >/dev/null 2>&1; then
+    MIRROR_CHOICE=$(printf '%s\n' "${MIRROR_NAMES[@]}" | fzf --prompt="Search and select mirror (type country name): " --height=50% --reverse --border)
+else
+    MIRROR_CHOICE=$(select_option "Select mirror" "${MIRROR_NAMES[@]}")
+fi
+
 if [[ -z "$MIRROR_CHOICE" ]]; then
     echo -e "${RED}Error: Mirror selection cancelled${NC}" >&2
     exit 1
 fi
-case "$MIRROR_CHOICE" in
-    "United States (Fastly)")
-        MIRROR_URL="https://mirror.fastly.archlinux.org"
-        ;;
-    "United States (Cloudflare)")
-        MIRROR_URL="https://mirror.cloudflare.com/archlinux"
-        ;;
-    "Germany (TU Berlin)")
-        MIRROR_URL="https://mirror.tu-berlin.de/archlinux"
-        ;;
-    "Germany (RWTH Aachen)")
-        MIRROR_URL="https://ftp.halifax.rwth-aachen.de/archlinux"
-        ;;
-    "United Kingdom (University of Kent)")
-        MIRROR_URL="https://mirror.cs.kent.ac.uk/archlinux"
-        ;;
-    "France (iut)")
-        MIRROR_URL="https://mirror.archlinux.ikoula.com/archlinux"
-        ;;
-    "Netherlands (Nluug)")
-        MIRROR_URL="https://mirror.nluug.nl/archlinux"
-        ;;
-    "Sweden (Pythonguides)")
-        MIRROR_URL="https://mirror.pythonguides.org/archlinux"
-        ;;
-    "Japan (JAIST)")
-        MIRROR_URL="https://ftp.jaist.ac.jp/pub/Linux/ArchLinux"
-        ;;
-    "Custom mirror")
-        echo -n "Enter custom mirror URL: "
-        if [[ -t 0 ]]; then
-            read MIRROR_URL
-        else
-            read MIRROR_URL < /dev/tty
-        fi
-        ;;
-    *)
-        MIRROR_URL="https://geo.mirror.pkgbuild.com"
-        ;;
-esac
+
+# Get mirror URL
+if [[ "${MIRROR_MAP[$MIRROR_CHOICE]}" == "CUSTOM" ]]; then
+    echo -n "Enter custom mirror URL: "
+    if [[ -t 0 ]]; then
+        read MIRROR_URL
+    else
+        read MIRROR_URL < /dev/tty
+    fi
+else
+    MIRROR_URL="${MIRROR_MAP[$MIRROR_CHOICE]}"
+fi
+
+if [[ -z "$MIRROR_URL" ]]; then
+    echo -e "${RED}Error: Invalid mirror URL${NC}" >&2
+    exit 1
+fi
 
 # Disk selection
 echo -e "\n${GREEN}Detecting disks...${NC}"
