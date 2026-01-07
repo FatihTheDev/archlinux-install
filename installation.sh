@@ -1,83 +1,61 @@
 #!/bin/bash
 
 # ==========================================
-# ⚡ PRE-FLIGHT CHECKS
+# ⚡ PRE-FLIGHT
 # ==========================================
-
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-# Fix input stream for pipes
 if [ ! -t 0 ]; then
     exec < /dev/tty
 fi
 
-echo -e "${BLUE}=== Archinstall Auto-Wrapper (Fixed Disk Logic) ===${NC}"
+echo -e "${BLUE}=== Archinstall Auto-Wrapper (Minimal) ===${NC}"
 
-# Install FZF if missing
+# Ensure FZF
 if ! command -v fzf &> /dev/null; then
-    echo -e "${GREEN}--> Installing fzf...${NC}"
     pacman -Sy --noconfirm fzf &> /dev/null
 fi
 
-# Update Archinstall to latest
-echo -e "${GREEN}--> Updating archinstall...${NC}"
+# Ensure latest archinstall (The ISO version is almost always broken)
 pip install --upgrade archinstall &> /dev/null
 
 # ==========================================
-# ⚡ INTERACTIVE SETUP
+# ⚡ GATHER DATA
 # ==========================================
 
-# --- Credentials ---
-read -p "Enter Username: " USER_NAME
-read -s -p "Enter User Password: " USER_PASS
+read -p "Username: " USER_NAME
+read -s -p "User Password: " USER_PASS
 echo ""
-read -s -p "Enter Root Password: " ROOT_PASS
+read -s -p "Root Password: " ROOT_PASS
 echo ""
 
-# --- Menus ---
-GPU_LABEL=$(echo -e "AMD (Open Source)\nIntel (Open Source)\nNVIDIA (Proprietary)\nVMware/VirtualBox" | fzf --prompt="Select GPU > " --height=15% --layout=reverse)
+GPU_LABEL=$(echo -e "AMD\nIntel\nNVIDIA\nVMware/VirtualBox" | fzf --prompt="GPU > " --height=10%)
 case "$GPU_LABEL" in
-    *"AMD"*)    GPU_DRIVER="amd" ;;
-    *"Intel"*)  GPU_DRIVER="intel" ;;
-    *"NVIDIA"*) GPU_DRIVER="nvidia" ;;
-    *)          GPU_DRIVER="all-open" ;;
+    "AMD") GPU_DRIVER="amd" ;;
+    "Intel") GPU_DRIVER="intel" ;;
+    "NVIDIA") GPU_DRIVER="nvidia" ;;
+    *) GPU_DRIVER="all-open" ;;
 esac
 
-DE_LABEL=$(echo -e "KDE Plasma\nGnome\nHyprland\nMinimal" | fzf --prompt="Select Desktop > " --height=15% --layout=reverse)
-case "$DE_LABEL" in
-    *"KDE"*)      PROFILE="desktop"; DE="kde" ;;
-    *"Gnome"*)    PROFILE="desktop"; DE="gnome" ;;
-    *"Hyprland"*) PROFILE="desktop"; DE="hyprland" ;;
-    *)            PROFILE="minimal"; DE="" ;;
-esac
-
-# --- Disk Selection (Reliable lsblk) ---
-echo -e "\n${BLUE}--- Disk Selection ---${NC}"
-# -p gives full path (/dev/sda), -d skips partitions, -n no header
+# Disk Selection
 RAW_DISK_LIST=$(lsblk -pdno NAME,SIZE,MODEL | grep -v "loop" | grep -v "sr")
-
-SELECTED_LINE=$(echo "$RAW_DISK_LIST" | fzf --prompt="Select Target Disk > " --height=15% --layout=reverse)
+SELECTED_LINE=$(echo "$RAW_DISK_LIST" | fzf --prompt="Select Disk > " --height=15%)
 TARGET_DISK=$(echo "$SELECTED_LINE" | awk '{print $1}')
 
-if [[ -z "$TARGET_DISK" ]]; then
-    echo -e "${RED}No disk selected. Exiting.${NC}"
-    exit 1
-fi
+if [[ -z "$TARGET_DISK" ]]; then exit 1; fi
 
-echo -e "${RED}WARNING: THIS WILL WIPE $TARGET_DISK${NC}"
-read -p "Type 'yes' to confirm: " CONFIRM
-if [[ "$CONFIRM" != "yes" ]]; then exit 1; fi
+echo -e "${RED}WIPING $TARGET_DISK! Type 'yes': ${NC}"
+read -p "> " CONFIRM
+[[ "$CONFIRM" != "yes" ]] && exit 1
 
 # ==========================================
-# ⚡ GENERATE CONFIG (The "Correct" Schema)
+# ⚡ THE FIX: "GUIDED" DISK LAYOUT SCHEMA
 # ==========================================
+echo -e "\n${BLUE}Generating verified JSON config...${NC}"
 
-echo -e "\n${BLUE}Generating configuration...${NC}"
-
-# We specify the full layout structure here to avoid the "No disk config" error
 python3 -c "
 import json
 
@@ -88,34 +66,36 @@ config = {
     'mirror-region': {'United States': 10, 'Germany': 10},
     'sys-language': 'en_US.UTF-8',
     'sys-encoding': 'UTF-8',
-    'profile': {
-        'path': '$PROFILE',
-        'details': ['$DE'] if '$DE' else []
-    },
+    'profile': {'path': 'minimal'},
     'harddrives': ['$TARGET_DISK'],
-    'disk_layout': {
-        'device': '$TARGET_DISK',
-        'wipe': True,
-        'partitions': [
-            {
-                'type': 'primary',
-                'start': '1MiB',
-                'size': '512MiB',
-                'boot': True,
-                'mountpoint': '/boot/efi',
-                'filesystem': {'name': 'fat32'}
-            },
-            {
-                'type': 'primary',
-                'start': '513MiB',
-                'size': '100%',
-                'mountpoint': '/',
-                'filesystem': {'name': 'btrfs'}
-            }
-        ]
-    },
+    # Using the 'disk_layouts' (plural) list which is the new standard
+    'disk_layouts': [
+        {
+            'device': '$TARGET_DISK',
+            'wipe': True,
+            'filesystem_type': 'btrfs',
+            'mount_options': ['compress=zstd'],
+            'partitions': [
+                {
+                    'boot': True,
+                    'filesystem': {'name': 'fat32'},
+                    'mountpoint': '/boot/efi',
+                    'size': '512MiB',
+                    'start': '1MiB',
+                    'type': 'primary'
+                },
+                {
+                    'filesystem': {'name': 'btrfs'},
+                    'mountpoint': '/',
+                    'size': '100%',
+                    'start': '513MiB',
+                    'type': 'primary'
+                }
+            ]
+        }
+    ],
     'gfx_driver': '$GPU_DRIVER',
-    'audio': 'pipewire',
+    'audio': None, # Handled by your other script
     'kernels': ['linux'],
     'packages': ['vim', 'git', 'networkmanager'],
     'network_config': {'type': 'nm'},
@@ -136,17 +116,16 @@ with open('auto_config.json', 'w') as f:
 # ==========================================
 # ⚡ EXECUTION
 # ==========================================
+echo -e "\n${GREEN}Starting Install...${NC}"
 
-echo -e "\n${GREEN}Starting Automated Install...${NC}"
-
-# Archinstall needs the config file. We run it in silent mode.
+# Running with --debug helps see exactly why a disk config might fail
 archinstall --config auto_config.json --silent
 
 EXIT_CODE=$?
 rm -f auto_config.json
 
 if [[ $EXIT_CODE -eq 0 ]]; then
-    echo -e "\n${GREEN}=== INSTALLATION COMPLETE ===${NC}"
+    echo -e "\n${GREEN}=== SUCCESS ===${NC}"
 else
-    echo -e "\n${RED}Installation Failed. Usually this is due to mirror timeouts.${NC}"
+    echo -e "\n${RED}Failed. Check /var/log/archinstall/install.log${NC}"
 fi
