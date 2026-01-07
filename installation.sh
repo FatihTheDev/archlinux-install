@@ -463,17 +463,22 @@ fi
 # Backup original mirrorlist
 cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.backup
 
-# Use reflector to get fastest mirrors
+# Use reflector to get fast and stable mirrors
 # If user provided countries, restrict to those; otherwise use global fastest
 # Example: US,SE or DE,NL
 if command -v reflector >/dev/null 2>&1; then
     if [[ -n "$MIRROR_COUNTRIES" ]]; then
-        reflector --country "$MIRROR_COUNTRIES" --latest 7 --sort rate --fastest 5 --protocol https --save /etc/pacman.d/mirrorlist --verbose 2>/dev/null || {
+        reflector --country "$MIRROR_COUNTRIES" \
+                  --age 12 --protocol https --ipv4 \
+                  --latest 20 --sort rate --fastest 10 \
+                  --save /etc/pacman.d/mirrorlist --verbose 2>/dev/null || {
             echo -e "${YELLOW}Warning: Reflector failed for countries $MIRROR_COUNTRIES, using default mirrorlist${NC}"
             cp /etc/pacman.d/mirrorlist.backup /etc/pacman.d/mirrorlist
         }
     else
-        reflector --latest 10 --sort rate --protocol https --save /etc/pacman.d/mirrorlist --verbose 2>/dev/null || {
+        reflector --age 12 --protocol https --ipv4 \
+                  --latest 30 --sort rate --fastest 15 \
+                  --save /etc/pacman.d/mirrorlist --verbose 2>/dev/null || {
             echo -e "${YELLOW}Warning: Reflector failed, using default mirrorlist${NC}"
             cp /etc/pacman.d/mirrorlist.backup /etc/pacman.d/mirrorlist
         }
@@ -488,6 +493,17 @@ partition_disk "$DISK_PATH" "$PARTITION_METHOD"
 # Install base system
 echo -e "${GREEN}Installing base system...${NC}"
 pacstrap /mnt base base-devel linux linux-firmware btrfs-progs
+
+# Tune pacman in target system for faster downloads (parallel downloads, colored output)
+echo -e "${GREEN}Tuning pacman configuration in target system...${NC}"
+if [[ -f /mnt/etc/pacman.conf ]]; then
+    # Enable ParallelDownloads (set to 5) and Color if not already enabled
+    sed -i 's/^#ParallelDownloads.*/ParallelDownloads = 5/' /mnt/etc/pacman.conf
+    if ! grep -q '^ParallelDownloads' /mnt/etc/pacman.conf; then
+        echo 'ParallelDownloads = 10' >> /mnt/etc/pacman.conf
+    fi
+    sed -i 's/^#Color/Color/' /mnt/etc/pacman.conf
+fi
 
 # Generate fstab
 echo -e "${GREEN}Generating fstab...${NC}"
@@ -603,4 +619,3 @@ echo "You can now reboot into your new Arch Linux installation."
 echo "Remember to:"
 echo "1. Unmount: umount -R /mnt"
 echo "2. Reboot: reboot"
-
