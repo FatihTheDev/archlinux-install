@@ -117,7 +117,7 @@ config = {
     'gfx_driver': '$GPU_DRIVER',
     'audio': 'pipewire',
     'kernels': ['linux'],
-    'packages': ['vim', 'git', 'networkmanager', 'firefox'],
+    'packages': ['vim', 'git', 'networkmanager'],
     'network_config': {'type': 'nm'},
     'timezone': 'UTC',
     'ntp': True,
