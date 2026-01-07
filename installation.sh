@@ -1,106 +1,129 @@
 #!/bin/bash
 
+# ==========================================
+# ⚡ PRE-FLIGHT CHECKS & DEPENDENCIES
+# ==========================================
+
 # Define Colors
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-echo -e "${BLUE}=== Archinstall Auto-Wrapper ===${NC}"
-echo -e "${GREEN}Updating archinstall to latest version...${NC}"
-pip install --upgrade archinstall &>/dev/null
+# 1. Fix Input Stream (Crucial for pipes!)
+# If stdin is not a TTY (because of the pipe), force it to open /dev/tty
+# This makes interactive prompts work even when running via "curl | bash"
+if [ ! -t 0 ]; then
+    exec < /dev/tty
+fi
 
-# ----------------------------------
-# 1. GATHER USER INPUTS
-# ----------------------------------
+echo -e "${BLUE}=== Archinstall Auto-Wrapper (FZF Edition) ===${NC}"
 
-# Get Credentials
+# 2. Install FZF if missing
+if ! command -v fzf &> /dev/null; then
+    echo -e "${GREEN}--> Installing fzf for menus...${NC}"
+    pacman -Sy --noconfirm fzf &> /dev/null
+fi
+
+# 3. Update Archinstall (Critical for bug fixes)
+echo -e "${GREEN}--> Updating archinstall...${NC}"
+pip install --upgrade archinstall &> /dev/null
+
+# ==========================================
+# ⚡ INTERACTIVE SETUP (FZF)
+# ==========================================
+
+# --- Credentials ---
 echo -e "\n${BLUE}--- User Configuration ---${NC}"
-read -p "Username: " USER_NAME
-read -s -p "User Password: " USER_PASS
+read -p "Enter Username: " USER_NAME
+while [[ -z "$USER_NAME" ]]; do
+    read -p "Username cannot be empty: " USER_NAME
+done
+
+read -s -p "Enter User Password: " USER_PASS
 echo ""
-read -s -p "Root Password: " ROOT_PASS
+read -s -p "Enter Root Password (leave empty to disable): " ROOT_PASS
 echo ""
 
-# Get GPU Choice
+# --- GPU Selection ---
 echo -e "\n${BLUE}--- Hardware Setup ---${NC}"
-echo "Select your GPU Driver:"
-echo "1) AMD (mesa)"
-echo "2) Intel (mesa)"
-echo "3) NVIDIA (Proprietary)"
-echo "4) VMware/VirtualBox"
-read -p "Choice [1-4]: " GPU_CHOICE
+GPU_LABEL=$(echo -e "AMD (Open Source)\nIntel (Open Source)\nNVIDIA (Proprietary)\nVMware/VirtualBox (Open)" | fzf --prompt="Select GPU Driver > " --height=20% --layout=reverse)
 
-# Map GPU choice to packages
-case $GPU_CHOICE in
-    1) GPU_DRIVER="amd";;
-    2) GPU_DRIVER="intel";;
-    3) GPU_DRIVER="nvidia";;
-    4) GPU_DRIVER="all-open";; # Fallback for VMs
-    *) GPU_DRIVER="all-open";;
+case "$GPU_LABEL" in
+    *"AMD"*)    GPU_DRIVER="amd" ;;
+    *"Intel"*)  GPU_DRIVER="intel" ;;
+    *"NVIDIA"*) GPU_DRIVER="nvidia" ;;
+    *)          GPU_DRIVER="all-open" ;;
 esac
+echo -e "${GREEN}Selected GPU: $GPU_DRIVER${NC}"
 
-# Get Desktop Environment (Optional, but usually needed with GPU)
+# --- Desktop Environment ---
 echo -e "\n${BLUE}--- Software Setup ---${NC}"
-echo "Select Desktop Profile:"
-echo "1) KDE Plasma"
-echo "2) Gnome"
-echo "3) Hyprland"
-echo "4) Minimal (CLI only)"
-read -p "Choice [1-4]: " DE_CHOICE
+DE_LABEL=$(echo -e "KDE Plasma\nGnome\nHyprland\nMinimal (CLI only)" | fzf --prompt="Select Desktop > " --height=20% --layout=reverse)
 
-case $DE_CHOICE in
-    1) PROFILE="desktop"; DE="kde";;
-    2) PROFILE="desktop"; DE="gnome";;
-    3) PROFILE="desktop"; DE="hyprland";;
-    4) PROFILE="minimal"; DE="";; 
-    *) PROFILE="minimal"; DE="";;
+case "$DE_LABEL" in
+    *"KDE"*)      PROFILE="desktop"; DE="kde" ;;
+    *"Gnome"*)    PROFILE="desktop"; DE="gnome" ;;
+    *"Hyprland"*) PROFILE="desktop"; DE="hyprland" ;;
+    *)            PROFILE="minimal"; DE="" ;;
 esac
+echo -e "${GREEN}Selected Profile: $PROFILE ($DE)${NC}"
 
-# Select Disk (Critical Step)
+# --- Disk Selection (Python Wrapper for Safety) ---
 echo -e "\n${BLUE}--- Disk Selection ---${NC}"
-# Use Python to reliably list disks in a format we can parse
-TARGET_DISK=$(python3 -c "
-import archinstall
-import json
+
+# We use Python to list drives because lsblk parsing can be tricky in scripts
+# This creates a JSON list of valid drives
+DISK_JSON=$(python3 -c "
+import archinstall, json
 try:
-    disks = archinstall.list_drives()
-    # Create a simple menu
-    filtered_disks = [d for d in disks if d.size > 1] # Filter tiny partitions
-    for i, disk in enumerate(filtered_disks):
-        print(f'{i}) {disk.device} ({disk.size} GB)')
-    
-    selection = int(input('Select Target Disk Number: '))
-    print(filtered_disks[selection].device)
+    # Filter out small loop devices
+    disks = [d for d in archinstall.list_drives() if d.size > 2]
+    out = []
+    for d in disks:
+        out.append({'device': d.device, 'size': f'{d.size}GB', 'model': d.model})
+    print(json.dumps(out))
 except:
-    print('')
+    print('[]')
 ")
 
+# Parse JSON into FZF list
+# Format: "/dev/sda | 500GB | Samsung SSD"
+SELECTED_LINE=$(echo "$DISK_JSON" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for d in data:
+    print(f\"{d['device']} | {d['size']} | {d['model']}\")
+" | fzf --prompt="Select Target Disk > " --height=20% --layout=reverse)
+
+# Extract just the device path (first column)
+TARGET_DISK=$(echo "$SELECTED_LINE" | awk '{print $1}')
+
 if [[ -z "$TARGET_DISK" ]]; then
-    echo -e "${RED}Invalid disk selection. Exiting.${NC}"
+    echo -e "${RED}No disk selected. Exiting.${NC}"
     exit 1
 fi
 
-echo -e "${GREEN}Targeting: $TARGET_DISK${NC}"
-echo -e "${RED}WARNING: THIS WILL WIPE $TARGET_DISK!${NC}"
+echo -e "${RED}WARNING: THIS WILL WIPE $TARGET_DISK${NC}"
 read -p "Type 'yes' to confirm: " CONFIRM
 if [[ "$CONFIRM" != "yes" ]]; then exit 1; fi
 
-# ----------------------------------
-# 2. GENERATE ARCHINSTALL CONFIG
-# ----------------------------------
+# ==========================================
+# ⚡ GENERATE CONFIG & INSTALL
+# ==========================================
+
 echo -e "\n${BLUE}Generating configuration...${NC}"
 
-# We use Python to dump the JSON to ensure it handles the format correctly.
-# This config enables: Btrfs (default compression), NetworkManager, Pipewire, etc.
+# Generate auto_config.json
 python3 -c "
 import json
 
+# Base structure
 config = {
-    'version': '2.5.0',
+    'version': '2.7.0',
     'archinstall-language': 'English',
     'keyboard-layout': 'us',
-    'mirror-region': {'United States': 10, 'Germany': 10}, 
+    'mirror-region': {'United States': 10, 'Germany': 10, 'United Kingdom': 10},
     'sys-language': 'en_US.UTF-8',
     'sys-encoding': 'UTF-8',
     'profile': {
@@ -117,7 +140,7 @@ config = {
     'audio': 'pipewire',
     'kernels': ['linux'],
     'packages': [
-        'vim', 'git', 'wget', 'neofetch', 'firefox'
+        'vim', 'git', 'wget', 'neofetch', 'firefox', 'networkmanager'
     ],
     'network_config': {
         'type': 'nm'
@@ -126,8 +149,7 @@ config = {
     'ntp': True
 }
 
-# Creds are handled separately in newer archinstall versions, 
-# but putting them in config is supported for silent automation.
+# User Creds
 creds = {
     '!users': [
         {
@@ -135,33 +157,33 @@ creds = {
             'password': '$USER_PASS',
             'sudo': True
         }
-    ],
-    '!root_password': '$ROOT_PASS'
+    ]
 }
 
-# Merge creds into config for simplicity
+if '$ROOT_PASS':
+    creds['!root_password'] = '$ROOT_PASS'
+
 config.update(creds)
 
 with open('auto_config.json', 'w') as f:
     json.dump(config, f, indent=4)
 "
 
-# ----------------------------------
-# 3. RUN ARCHINSTALL
-# ----------------------------------
-
 echo -e "\n${GREEN}Starting Automated Install...${NC}"
-echo "Sit back and relax. Archinstall is taking over."
-echo "Logs are available at /var/log/archinstall/install.log"
+echo "Log file: /var/log/archinstall/install.log"
 
-# Run archinstall in silent mode using the generated config
+# Run it
 archinstall --config auto_config.json --silent
 
-if [[ $? -eq 0 ]]; then
-    echo -e "\n${GREEN}Installation Complete!${NC}"
-    # Clean up the config file containing passwords
-    rm auto_config.json
+EXIT_CODE=$?
+
+# Cleanup
+rm -f auto_config.json
+
+if [[ $EXIT_CODE -eq 0 ]]; then
+    echo -e "\n${GREEN}=== INSTALLATION COMPLETE ===${NC}"
     echo "You can now reboot."
 else
-    echo -e "\n${RED}Installation Failed. Check logs.${NC}"
+    echo -e "\n${RED}Installation Failed!${NC}"
+    echo "Check the logs above."
 fi
