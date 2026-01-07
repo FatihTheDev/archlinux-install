@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# ⚡ PRE-FLIGHT
+# PRE-FLIGHT
 # ==========================================
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
@@ -12,18 +12,18 @@ if [ ! -t 0 ]; then
     exec < /dev/tty
 fi
 
-echo -e "${BLUE}=== Archinstall Auto-Wrapper (Minimal) ===${NC}"
+echo -e "${BLUE}=== Archinstall Auto-Wrapper (Advanced Btrfs) ===${NC}"
 
-# Ensure FZF
+# Ensure fzf
 if ! command -v fzf &> /dev/null; then
     pacman -Sy --noconfirm fzf &> /dev/null
 fi
 
-# Ensure latest archinstall (The ISO version is almost always broken)
+# Always upgrade archinstall (ISO version is outdated)
 pip install --upgrade archinstall &> /dev/null
 
 # ==========================================
-# ⚡ GATHER DATA
+# GATHER DATA
 # ==========================================
 
 read -p "Username: " USER_NAME
@@ -32,7 +32,9 @@ echo ""
 read -s -p "Root Password: " ROOT_PASS
 echo ""
 
-GPU_LABEL=$(echo -e "AMD\nIntel\nNVIDIA\nVMware/VirtualBox" | fzf --prompt="GPU > " --height=10%)
+GPU_LABEL=$(echo -e "AMD\nIntel\nNVIDIA\nVMware/VirtualBox" | \
+    fzf --prompt="GPU > " --height=10%)
+
 case "$GPU_LABEL" in
     "AMD") GPU_DRIVER="amd" ;;
     "Intel") GPU_DRIVER="intel" ;;
@@ -40,92 +42,159 @@ case "$GPU_LABEL" in
     *) GPU_DRIVER="all-open" ;;
 esac
 
-# Disk Selection
+# ==========================================
+# DISK SELECTION
+# ==========================================
+
 RAW_DISK_LIST=$(lsblk -pdno NAME,SIZE,MODEL | grep -v "loop" | grep -v "sr")
 SELECTED_LINE=$(echo "$RAW_DISK_LIST" | fzf --prompt="Select Disk > " --height=15%)
 TARGET_DISK=$(echo "$SELECTED_LINE" | awk '{print $1}')
 
-if [[ -z "$TARGET_DISK" ]]; then exit 1; fi
+[[ -z "$TARGET_DISK" ]] && exit 1
 
-echo -e "${RED}WIPING $TARGET_DISK! Type 'yes': ${NC}"
-read -p "> " CONFIRM
-[[ "$CONFIRM" != "yes" ]] && exit 1
+DISK_MODE=$(printf "Use entire disk\nUse remaining free space\nManual partitioning" | \
+    fzf --prompt="Disk layout > " --height=10%)
+
+[[ -z "$DISK_MODE" ]] && exit 1
+
+if [[ "$DISK_MODE" == "Use entire disk" ]]; then
+    echo -e "${RED}WIPING $TARGET_DISK! Type 'yes': ${NC}"
+    read -p "> " CONFIRM
+    [[ "$CONFIRM" != "yes" ]] && exit 1
+
+    PARTITION_SCHEME="entire_disk"
+
+elif [[ "$DISK_MODE" == "Use remaining free space" ]]; then
+    PARTITION_SCHEME="free_space"
+
+else
+    echo -e "${BLUE}Launching cfdisk on ${TARGET_DISK}...${NC}"
+    cfdisk "$TARGET_DISK"
+    PARTITION_SCHEME="manual"
+fi
 
 # ==========================================
-# ⚡ THE FIX: "GUIDED" DISK LAYOUT SCHEMA
+# GENERATE CONFIG JSON
 # ==========================================
-echo -e "\n${BLUE}Generating verified JSON config...${NC}"
 
-python3 -c "
-import json
+echo -e "${BLUE}Generating auto_config.json...${NC}"
+
+python3 - <<EOF
+import json, subprocess
+
+disk = "$TARGET_DISK"
+mode = "$PARTITION_SCHEME"
 
 config = {
-    'version': '2.8.1',
-    'archinstall-language': 'English',
-    'keyboard-layout': 'us',
-    'mirror-region': {'United States': 10, 'Germany': 10},
-    'sys-language': 'en_US.UTF-8',
-    'sys-encoding': 'UTF-8',
-    'profile': {'path': 'minimal'},
-    'harddrives': ['$TARGET_DISK'],
-    # Using the 'disk_layouts' (plural) list which is the new standard
-    'disk_layouts': [
-        {
-            'device': '$TARGET_DISK',
-            'wipe': True,
-            'filesystem_type': 'btrfs',
-            'mount_options': ['compress=zstd'],
-            'partitions': [
-                {
-                    'boot': True,
-                    'filesystem': {'name': 'fat32'},
-                    'mountpoint': '/boot/efi',
-                    'size': '512MiB',
-                    'start': '1MiB',
-                    'type': 'primary'
-                },
-                {
-                    'filesystem': {'name': 'btrfs'},
-                    'mountpoint': '/',
-                    'size': '100%',
-                    'start': '513MiB',
-                    'type': 'primary'
-                }
-            ]
-        }
-    ],
-    'gfx_driver': '$GPU_DRIVER',
-    'audio': None, # Handled by your other script
-    'kernels': ['linux'],
-    'packages': ['vim', 'git', 'networkmanager'],
-    'network_config': {'type': 'nm'},
-    'timezone': 'UTC',
-    'ntp': True,
-    '!users': [
-        {'username': '$USER_NAME', 'password': '$USER_PASS', 'sudo': True}
+    "version": "2.9.0",
+    "archinstall-language": "English",
+    "keyboard-layout": "us",
+    "mirror-region": {"United States": 10, "Germany": 10},
+    "sys-language": "en_US.UTF-8",
+    "sys-encoding": "UTF-8",
+    "profile": {"path": "minimal"},
+    "harddrives": [disk],
+    "kernels": ["linux"],
+    "packages": ["vim", "git", "networkmanager"],
+    "network_config": {"type": "nm"},
+    "timezone": "UTC",
+    "ntp": True,
+    "gfx_driver": "$GPU_DRIVER",
+    "!users": [
+        {"username": "$USER_NAME", "password": "$USER_PASS", "sudo": True}
     ]
 }
 
-if '$ROOT_PASS':
-    config['!root_password'] = '$ROOT_PASS'
+root_pass = "$ROOT_PASS"
+if root_pass:
+    config["!root_password"] = root_pass
 
-with open('auto_config.json', 'w') as f:
+# ==========================================
+# MODE 1: ENTIRE DISK (WIPE + BTRFS)
+# ==========================================
+if mode == "entire_disk":
+    config["disk_config"] = [
+        {
+            "device": disk,
+            "wipe": True,
+            "partitions": [
+                {
+                    "boot": True,
+                    "filesystem": {"name": "fat32"},
+                    "mountpoint": "/boot/efi",
+                    "size": "512MiB",
+                    "start": "1MiB",
+                    "type": "primary"
+                },
+                {
+                    "filesystem": {"name": "btrfs"},
+                    "mountpoint": "/",
+                    "size": "100%",
+                    "type": "primary",
+                    "subvolumes": {
+                        "@": "/",
+                        "@home": "/home",
+                        "@snapshots": "/.snapshots",
+                        "@cache": "/var/cache",
+                        "@log": "/var/log"
+                    },
+                    "mount_options": ["compress=zstd"]
+                }
+            ]
+        }
+    ]
+
+# ==========================================
+# MODE 2: USE FREE SPACE ON DISK
+# ==========================================
+elif mode == "free_space":
+    config["disk_config"] = [
+        {
+            "device": disk,
+            "use_existing": True,
+            "filesystem_type": "btrfs",
+            "mount_options": ["compress=zstd"]
+        }
+    ]
+
+# ==========================================
+# MODE 3: MANUAL PARTITIONING
+# ==========================================
+else:
+    # get partition list
+    parts_raw = subprocess.check_output(
+        ["lsblk", "-lnpo", "NAME,TYPE", disk]
+    ).decode().splitlines()
+
+    partitions = [p.split()[0] for p in parts_raw if p.endswith("part")]
+
+    config["disk_config"] = [
+        {
+            "device": disk,
+            "use_existing": True,
+            "partitions": [
+                {"device": part, "mountpoint": None}
+                for part in partitions
+            ]
+        }
+    ]
+
+with open("auto_config.json", "w") as f:
     json.dump(config, f, indent=4)
-"
+EOF
 
 # ==========================================
-# ⚡ EXECUTION
+# EXECUTE ARCHINSTALL
 # ==========================================
-echo -e "\n${GREEN}Starting Install...${NC}"
 
-# Running with --debug helps see exactly why a disk config might fail
-archinstall --config auto_config.json --silent
+echo -e "${GREEN}Starting Archinstall...${NC}"
+archinstall --config auto_config.json --silent --debug
 
 EXIT_CODE=$?
 rm -f auto_config.json
 
 if [[ $EXIT_CODE -eq 0 ]]; then
-    echo -e "\n${GREEN}=== SUCCESS ===${NC}"
+    echo -e "${GREEN}=== SUCCESS ===${NC}"
 else
-    echo -e "\n${RED}Failed. Check /var/log/archinstall/install.log${NC}"
+    echo -e "${RED}Failed. Check /var/log/archinstall/install.log${NC}"
 fi
