@@ -227,6 +227,46 @@ if [[ -z "$GPU_CHOICE" ]]; then
     exit 1
 fi
 
+# Mirror countries (optional, multi-select)
+COUNTRY_OPTIONS=(
+    "US United States"
+    "SE Sweden"
+    "DE Germany"
+    "GB United Kingdom"
+    "FR France"
+    "NL Netherlands"
+    "CA Canada"
+    "AU Australia"
+    "JP Japan"
+    "KR South Korea"
+    "SG Singapore"
+    "IN India"
+    "BR Brazil"
+    "PL Poland"
+    "CZ Czech Republic"
+    "IT Italy"
+    "ES Spain"
+    "CH Switzerland"
+    "AT Austria"
+    "DK Denmark"
+    "NO Norway"
+    "FI Finland"
+    "CN China"
+)
+
+MIRROR_COUNTRIES=""
+if command -v fzf >/dev/null 2>&1; then
+    MIRROR_COUNTRIES=$(printf '%s\n' "${COUNTRY_OPTIONS[@]}" | fzf -m --prompt="Select mirror countries (type to search, TAB to multi-select): " --height=50% --reverse --border | awk '{print $1}' | paste -sd',' -)
+else
+    echo -n "Enter comma-separated country codes for mirrors (e.g., US,SE). Leave empty for global fastest: "
+    if [[ -t 0 ]]; then
+        read MIRROR_COUNTRIES
+    else
+        read MIRROR_COUNTRIES < /dev/tty
+    fi
+    MIRROR_COUNTRIES=${MIRROR_COUNTRIES^^}
+fi
+
 # Printing support
 if get_yesno "Do you want printing support (CUPS)?"; then
     INSTALL_CUPS=true
@@ -241,7 +281,11 @@ echo "Root account: $([ "$LOCK_ROOT" = true ] && echo "Locked" || echo "Enabled"
 echo "Disk: $DISK_PATH"
 echo "Partitioning: $PARTITION_METHOD"
 echo "GPU: $GPU_CHOICE"
-echo "Mirror: Auto-selected (fastest available)"
+if [[ -n "$MIRROR_COUNTRIES" ]]; then
+    echo "Mirror: Fastest in ${MIRROR_COUNTRIES//,/ , } (reflector)"
+else
+    echo "Mirror: Fastest available (reflector)"
+fi
 echo "Printing support: $([ "$INSTALL_CUPS" = true ] && echo "Yes" || echo "No")"
 echo ""
 
@@ -420,12 +464,20 @@ fi
 cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.backup
 
 # Use reflector to get fastest mirrors
-# Options: --latest 20 (latest 10 mirrors), --sort rate (sort by download rate), --protocol https (HTTPS only)
+# If user provided countries, restrict to those; otherwise use global fastest
+# Example: US,SE or DE,NL
 if command -v reflector >/dev/null 2>&1; then
-    reflector --latest 10 --sort rate --protocol https --save /etc/pacman.d/mirrorlist --verbose 2>/dev/null || {
-        echo -e "${YELLOW}Warning: Reflector failed, using default mirrorlist${NC}"
-        cp /etc/pacman.d/mirrorlist.backup /etc/pacman.d/mirrorlist
-    }
+    if [[ -n "$MIRROR_COUNTRIES" ]]; then
+        reflector --country "$MIRROR_COUNTRIES" --latest 7 --sort rate --fastest 5 --protocol https --save /etc/pacman.d/mirrorlist --verbose 2>/dev/null || {
+            echo -e "${YELLOW}Warning: Reflector failed for countries $MIRROR_COUNTRIES, using default mirrorlist${NC}"
+            cp /etc/pacman.d/mirrorlist.backup /etc/pacman.d/mirrorlist
+        }
+    else
+        reflector --latest 10 --sort rate --protocol https --save /etc/pacman.d/mirrorlist --verbose 2>/dev/null || {
+            echo -e "${YELLOW}Warning: Reflector failed, using default mirrorlist${NC}"
+            cp /etc/pacman.d/mirrorlist.backup /etc/pacman.d/mirrorlist
+        }
+    fi
 else
     echo -e "${YELLOW}Warning: Reflector not available, using default mirrorlist${NC}"
 fi
@@ -551,3 +603,4 @@ echo "You can now reboot into your new Arch Linux installation."
 echo "Remember to:"
 echo "1. Unmount: umount -R /mnt"
 echo "2. Reboot: reboot"
+
