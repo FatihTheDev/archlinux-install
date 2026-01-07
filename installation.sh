@@ -11,21 +11,19 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 # 1. Fix Input Stream (Crucial for pipes!)
-# If stdin is not a TTY (because of the pipe), force it to open /dev/tty
-# This makes interactive prompts work even when running via "curl | bash"
 if [ ! -t 0 ]; then
     exec < /dev/tty
 fi
 
-echo -e "${BLUE}=== Archinstall Auto-Wrapper (FZF Edition) ===${NC}"
+echo -e "${BLUE}=== Archinstall Auto-Wrapper (Native Linux Edition) ===${NC}"
 
 # 2. Install FZF if missing
 if ! command -v fzf &> /dev/null; then
-    echo -e "${GREEN}--> Installing fzf for menus...${NC}"
+    echo -e "${GREEN}--> Installing fzf...${NC}"
     pacman -Sy --noconfirm fzf &> /dev/null
 fi
 
-# 3. Update Archinstall (Critical for bug fixes)
+# 3. Update Archinstall
 echo -e "${GREEN}--> Updating archinstall...${NC}"
 pip install --upgrade archinstall &> /dev/null
 
@@ -69,40 +67,33 @@ case "$DE_LABEL" in
 esac
 echo -e "${GREEN}Selected Profile: $PROFILE ($DE)${NC}"
 
-# --- Disk Selection (Python Wrapper for Safety) ---
+# --- Disk Selection (NATIVE LINUX TOOLS) ---
 echo -e "\n${BLUE}--- Disk Selection ---${NC}"
 
-# We use Python to list drives because lsblk parsing can be tricky in scripts
-# This creates a JSON list of valid drives
-DISK_JSON=$(python3 -c "
-import archinstall, json
-try:
-    # Filter out small loop devices
-    disks = [d for d in archinstall.list_drives() if d.size > 2]
-    out = []
-    for d in disks:
-        out.append({'device': d.device, 'size': f'{d.size}GB', 'model': d.model})
-    print(json.dumps(out))
-except:
-    print('[]')
-")
+# lsblk -d: List block devices (no partitions)
+# -n: No header
+# -o: Output columns
+# grep -v "loop": Remove loopback devices (live ISO junk)
+# grep -v "sr": Remove CD-ROMs
+RAW_DISK_LIST=$(lsblk -dno NAME,SIZE,MODEL,TYPE | grep "disk" | grep -v "loop" | grep -v "sr")
 
-# Parse JSON into FZF list
-# Format: "/dev/sda | 500GB | Samsung SSD"
-SELECTED_LINE=$(echo "$DISK_JSON" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-for d in data:
-    print(f\"{d['device']} | {d['size']} | {d['model']}\")
-" | fzf --prompt="Select Target Disk > " --height=20% --layout=reverse)
+if [[ -z "$RAW_DISK_LIST" ]]; then
+    echo -e "${RED}No suitable disks found! (Is the virtual disk attached?)${NC}"
+    lsblk # Print full tree for debugging
+    exit 1
+fi
 
-# Extract just the device path (first column)
-TARGET_DISK=$(echo "$SELECTED_LINE" | awk '{print $1}')
+# Show the menu
+SELECTED_LINE=$(echo "$RAW_DISK_LIST" | fzf --prompt="Select Target Disk > " --height=20% --layout=reverse)
 
-if [[ -z "$TARGET_DISK" ]]; then
+if [[ -z "$SELECTED_LINE" ]]; then
     echo -e "${RED}No disk selected. Exiting.${NC}"
     exit 1
 fi
+
+# Extract just the name (e.g., "sda" or "nvme0n1") from the first column
+DISK_NAME=$(echo "$SELECTED_LINE" | awk '{print $1}')
+TARGET_DISK="/dev/$DISK_NAME"
 
 echo -e "${RED}WARNING: THIS WILL WIPE $TARGET_DISK${NC}"
 read -p "Type 'yes' to confirm: " CONFIRM
@@ -114,13 +105,13 @@ if [[ "$CONFIRM" != "yes" ]]; then exit 1; fi
 
 echo -e "\n${BLUE}Generating configuration...${NC}"
 
-# Generate auto_config.json
+# We still use Python here just to write the JSON safely (avoiding syntax errors)
 python3 -c "
 import json
 
 # Base structure
 config = {
-    'version': '2.7.0',
+    'version': '2.8.0',
     'archinstall-language': 'English',
     'keyboard-layout': 'us',
     'mirror-region': {'United States': 10, 'Germany': 10, 'United Kingdom': 10},
