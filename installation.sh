@@ -767,7 +767,11 @@ partition_free_space() {
 partition_manual() {
     local disk="/dev/$INSTALL_DISK"
     
-    dialog --msgbox "You will now be taken to cfdisk for manual partitioning.\n\nAfter partitioning:\n- Make sure you have a root partition (btrfs)\n- If UEFI, make sure you have an EFI partition (fat32, ~512MB)\n- Mark EFI partition as ESP/boot if UEFI\n- Mark root partition as boot if BIOS\n\nPress OK to continue." 12 60
+    if is_uefi; then
+        dialog --msgbox "You will now be taken to cfdisk for manual partitioning.\n\nAfter partitioning:\n- Make sure you have a root partition (btrfs)\n- Make sure you have an EFI partition (fat32, ~512MB)\n- Mark EFI partition as ESP/boot\n\nPress OK to continue." 12 60
+    else
+        dialog --msgbox "You will now be taken to cfdisk for manual partitioning.\n\nAfter partitioning:\n- Make sure you have a root partition (btrfs)\n- Mark root partition as boot\n\nPress OK to continue." 12 60
+    fi
     
     cfdisk "$disk"
     
@@ -879,6 +883,35 @@ generate_fstab() {
     sed -i 's|subvol=@snapshots|subvol=@snapshots,compress=zstd,noatime|g' "$MOUNT_POINT/etc/fstab"
 }
 
+# Configure zram swap
+configure_zram_swap() {
+    dialog --infobox "Configuring zram swap..." 5 50
+    
+    # Create zram service file
+    cat > "$MOUNT_POINT/etc/systemd/system/zram.service" <<'EOF'
+[Unit]
+Description=Swap with zram
+After=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/sbin/modprobe zram
+ExecStart=/usr/bin/bash -c 'echo lz4 > /sys/block/zram0/comp_algorithm'
+ExecStart=/usr/bin/bash -c 'echo 50% > /sys/block/zram0/disksize'
+ExecStart=/usr/bin/mkswap /dev/zram0
+ExecStart=/usr/bin/swapon /dev/zram0 --priority 5
+ExecStop=/usr/bin/swapoff /dev/zram0
+ExecStop=/usr/bin/rmmod zram
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    # Enable zram service
+    arch-chroot "$MOUNT_POINT" systemctl enable zram.service
+}
+
 # Configure system
 configure_system() {
     dialog --infobox "Configuring system..." 5 50
@@ -956,6 +989,9 @@ EOF
     
     # Enable NetworkManager
     arch-chroot "$MOUNT_POINT" systemctl enable NetworkManager
+    
+    # Configure zram swap
+    configure_zram_swap
     
     # Install and configure GRUB
     if is_uefi; then
