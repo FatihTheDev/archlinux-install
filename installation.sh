@@ -327,7 +327,7 @@ get_timezone() {
                 local display_name=$(echo "$tz" | sed 's|_| |g' | sed 's|/| - |g')
                 timezones+=("$tz" "$display_name")
             fi
-        done < <(timedatectl list-timezones | head -100)
+        done < <(timedatectl list-timezones | head)
         
         if [[ ${#timezones[@]} -gt 0 ]]; then
             TIMEZONE=$(dialog --backtitle "Arch Linux Installer" \
