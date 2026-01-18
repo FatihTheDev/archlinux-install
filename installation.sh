@@ -35,9 +35,53 @@ check_tty() {
         exit 1
     fi
     
-    # Ensure we have a proper terminal type for dialog
-    if [[ -z "${TERM:-}" ]]; then
-        export TERM=xterm-256color
+    # Detect TTY environment and set appropriate TERM
+    local tty_device=""
+    if [[ -t 0 ]]; then
+        tty_device=$(tty 2>/dev/null || echo "")
+    fi
+    
+    # If TERM is not set or invalid, detect and set appropriate value
+    if [[ -z "${TERM:-}" ]] || (command -v tput &> /dev/null && ! tput longname &> /dev/null 2>&1); then
+        # Detect terminal type based on device
+        if [[ -n "$tty_device" ]]; then
+            if [[ "$tty_device" =~ ^/dev/tty[1-9] ]] || [[ "$tty_device" =~ ^/dev/ttyS ]] || [[ "$tty_device" =~ ^/dev/console ]]; then
+                # Virtual console (tty1-tty6) or serial console - use 'linux' term
+                export TERM=linux
+            elif [[ "$tty_device" =~ ^/dev/pts ]]; then
+                # Pseudo-terminal (SSH, X terminal) - use xterm
+                export TERM=xterm
+            else
+                # Unknown device, try linux first
+                export TERM=linux
+            fi
+        else
+            # Can't detect tty device, check if we're likely in a virtual console
+            # by checking if X is running or if we're in a graphical environment
+            if [[ -z "${DISPLAY:-}" ]] && [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
+                # Likely in a virtual console (TTY)
+                export TERM=linux
+            else
+                # Likely in a graphical terminal
+                export TERM=xterm
+            fi
+        fi
+    fi
+    
+    # Ensure TERM is set (fallback to linux for TTY compatibility)
+    export TERM="${TERM:-linux}"
+    
+    # Verify TERM is valid by testing tput (if available)
+    if command -v tput &> /dev/null; then
+        if ! tput longname &> /dev/null 2>&1; then
+            # TERM might be invalid, try common TTY terms
+            for term in linux vt100 xterm; do
+                if TERM="$term" tput longname &> /dev/null 2>&1; then
+                    export TERM="$term"
+                    break
+                fi
+            done
+        fi
     fi
     
     # Test if dialog can actually work
@@ -45,14 +89,51 @@ check_tty() {
         return 0  # Will be caught by check_dependencies
     fi
     
-    # Quick test to see if dialog works
+    # Test dialog with current TERM
     if ! dialog --version &> /dev/null; then
-        echo "WARNING: Dialog may not work properly in this environment." >&2
+        # Try with a more basic TERM if current one fails
+        local original_term="$TERM"
+        for fallback_term in linux vt100 xterm; do
+            export TERM="$fallback_term"
+            if dialog --version &> /dev/null; then
+                break
+            fi
+        done
+        if ! dialog --version &> /dev/null; then
+            echo "WARNING: Dialog may not work properly in this environment." >&2
+            export TERM="$original_term"
+        fi
     fi
 }
 
-# Color codes for dialog
+# Dialog configuration
+# Use /dev/null to prevent reading config file, dialog will auto-detect terminal capabilities
 export DIALOGRC=/dev/null
+
+# Setup dialog for TTY compatibility
+setup_dialog_colors() {
+    # Dialog automatically adapts to terminal capabilities
+    # We just need to ensure TERM is set correctly (done in check_tty)
+    # Dialog will work fine in TTY without any special options
+    
+    # Set dialog label defaults for consistent TTY experience
+    export DIALOG_OK_LABEL="OK"
+    export DIALOG_CANCEL_LABEL="Cancel"
+    export DIALOG_EXTRA_LABEL="Extra"
+    export DIALOG_HELP_LABEL="Help"
+    export DIALOG_YES_LABEL="Yes"
+    export DIALOG_NO_LABEL="No"
+    
+    # Ensure dialog can access the terminal properly
+    # This is especially important for TTY environments
+    if command -v dialog &> /dev/null; then
+        # Test that dialog can actually display (silent test)
+        if ! dialog --print-version &> /dev/null 2>&1; then
+            echo "WARNING: Dialog may have issues in this terminal environment." >&2
+            echo "TERM is set to: $TERM" >&2
+        fi
+    fi
+}
 
 # Installation variables
 ROOT_PASSWORD=""
@@ -634,6 +715,7 @@ EOF
 # Main installation function
 main() {
     check_tty
+    setup_dialog_colors
     check_root
     check_dependencies
     show_welcome
