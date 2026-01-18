@@ -1,210 +1,682 @@
 #!/bin/bash
 
-# ==========================================
-# PRE-FLIGHT
-# ==========================================
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-RED='\033[0;31m'
-NC='\033[0m'
+# Arch Linux Installation Script with ncurses TUI
+# This script provides a user-friendly installation interface similar to Debian installer
+#
+# Usage:
+#   Direct execution: sudo bash install.sh
+#   Piped execution:  sudo wget -qO- https://script-url | bash
+#   Download first:   wget -qO- https://script-url > install.sh && sudo bash install.sh
+#
+# Note: This script requires an interactive terminal for the ncurses TUI interface.
+# When piping, ensure you're running in a terminal (not via SSH without -t flag).
 
-if [ ! -t 0 ]; then
-    exec < /dev/tty
+# Use set -euo but handle piped execution gracefully
+set -eu
+# Only enable pipefail if stdin is a terminal (not a pipe)
+# This allows the script to work when piped: wget -qO- URL | bash
+if [[ -t 0 ]]; then
+    set -o pipefail
 fi
 
-echo -e "${BLUE}=== Archinstall Auto-Wrapper (Advanced Btrfs) ===${NC}"
-
-# Ensure fzf
-if ! command -v fzf &> /dev/null; then
-    pacman -Sy --noconfirm fzf &> /dev/null
-fi
-
-# Always upgrade archinstall (ISO version is outdated)
-pip install --upgrade archinstall &> /dev/null
-
-# ==========================================
-# GATHER DATA
-# ==========================================
-
-read -p "Username: " USER_NAME
-read -s -p "User Password: " USER_PASS
-echo ""
-read -s -p "Root Password: " ROOT_PASS
-echo ""
-
-GPU_LABEL=$(echo -e "AMD\nIntel\nNVIDIA\nVMware/VirtualBox" | \
-    fzf --prompt="GPU > " --height=10%)
-
-case "$GPU_LABEL" in
-    "AMD") GPU_DRIVER="amd" ;;
-    "Intel") GPU_DRIVER="intel" ;;
-    "NVIDIA") GPU_DRIVER="nvidia" ;;
-    *) GPU_DRIVER="all-open" ;;
-esac
-
-# ==========================================
-# DISK SELECTION
-# ==========================================
-
-RAW_DISK_LIST=$(lsblk -pdno NAME,SIZE,MODEL | grep -v "loop" | grep -v "sr")
-SELECTED_LINE=$(echo "$RAW_DISK_LIST" | fzf --prompt="Select Disk > " --height=15%)
-TARGET_DISK=$(echo "$SELECTED_LINE" | awk '{print $1}')
-
-[[ -z "$TARGET_DISK" ]] && exit 1
-
-DISK_MODE=$(printf "Use entire disk\nUse remaining free space\nManual partitioning" | \
-    fzf --prompt="Disk layout > " --height=10%)
-
-[[ -z "$DISK_MODE" ]] && exit 1
-
-if [[ "$DISK_MODE" == "Use entire disk" ]]; then
-    echo -e "${RED}WIPING $TARGET_DISK! Type 'yes': ${NC}"
-    read -p "> " CONFIRM
-    [[ "$CONFIRM" != "yes" ]] && exit 1
-    PARTITION_SCHEME="entire_disk"
-
-elif [[ "$DISK_MODE" == "Use remaining free space" ]]; then
-    PARTITION_SCHEME="free_space"
-
-else
-    echo -e "${BLUE}Launching cfdisk on ${TARGET_DISK}...${NC}"
-    cfdisk "$TARGET_DISK"
-    PARTITION_SCHEME="manual"
-fi
-
-# ==========================================
-# GENERATE CONFIG JSON (FIXED SCHEMA)
-# ==========================================
-
-echo -e "${BLUE}Generating auto_config.json...${NC}"
-
-python3 - <<EOF
-import json, subprocess
-
-disk = "$TARGET_DISK"
-mode = "$PARTITION_SCHEME"
-
-config = {
-    "version": "2.9.0",
-    "archinstall-language": "English",
-    "keyboard-layout": "us",
-    "mirror-region": {"United States": 10, "Germany": 10},
-    "sys-language": "en_US.UTF-8",
-    "sys-encoding": "UTF-8",
-    "profile": {"path": "minimal"},
-    "harddrives": [disk],
-    "kernels": ["linux"],
-    "packages": ["vim", "git", "networkmanager"],
-    "network_config": {"type": "nm"},
-    "timezone": "UTC",
-    "ntp": True,
-    "gfx_driver": "$GPU_DRIVER",
-    "!users": [
-        {"username": "$USER_NAME", "password": "$USER_PASS", "sudo": True}
-    ]
+# Check for TTY (required for dialog)
+check_tty() {
+    # Dialog needs stdout and stderr to be terminals (stdin can be piped)
+    # When piping: stdin is pipe, but stdout/stderr are still terminals
+    if [[ ! -t 1 ]] || [[ ! -t 2 ]]; then
+        echo "ERROR: This script requires stdout and stderr to be connected to a terminal." >&2
+        echo "Dialog (ncurses) needs a terminal to display the interface." >&2
+        echo "" >&2
+        echo "If piping, ensure you're running in a terminal:" >&2
+        echo "  sudo wget -qO- URL | bash" >&2
+        echo "" >&2
+        echo "Or download first:" >&2
+        echo "  wget -qO- URL > install.sh && sudo bash install.sh" >&2
+        exit 1
+    fi
+    
+    # Ensure we have a proper terminal type for dialog
+    if [[ -z "${TERM:-}" ]]; then
+        export TERM=xterm-256color
+    fi
+    
+    # Test if dialog can actually work
+    if ! command -v dialog &> /dev/null; then
+        return 0  # Will be caught by check_dependencies
+    fi
+    
+    # Quick test to see if dialog works
+    if ! dialog --version &> /dev/null; then
+        echo "WARNING: Dialog may not work properly in this environment." >&2
+    fi
 }
 
-root_pass = "$ROOT_PASS"
-if root_pass:
-    config["!root_password"] = root_pass
+# Color codes for dialog
+export DIALOGRC=/dev/null
 
-# ================================================================
-# REQUIRED FIX:
-# disk_config MUST be structured as:
-#   "disk_config": { "config": [ ... ] }
-# ================================================================
-disk_wrapper = { "config": [] }
+# Installation variables
+ROOT_PASSWORD=""
+LOCK_ROOT=false
+USERNAME=""
+USER_PASSWORD=""
+SELECTED_COUNTRIES=()
+INSTALL_DISK=""
+PARTITION_METHOD=""
+MOUNT_POINT="/mnt"
+EFI_PARTITION=""
+ROOT_PARTITION=""
 
-# ==========================================
-# MODE 1: ENTIRE DISK (WIPE + BTRFS SUBVOLS)
-# ==========================================
-if mode == "entire_disk":
-    disk_wrapper["config"].append(
-        {
-            "device": disk,
-            "wipe": True,
-            "partitions": [
-                {
-                    "boot": True,
-                    "filesystem": {"name": "fat32"},
-                    "mountpoint": "/boot/efi",
-                    "size": "512MiB",
-                    "start": "1MiB",
-                    "type": "primary"
-                },
-                {
-                    "filesystem": {"name": "btrfs"},
-                    "mountpoint": "/",
-                    "size": "100%",
-                    "type": "primary",
-                    "subvolumes": {
-                        "@": "/",
-                        "@home": "/home",
-                        "@snapshots": "/.snapshots",
-                        "@cache": "/var/cache",
-                        "@log": "/var/log"
-                    },
-                    "mount_options": ["compress=zstd"]
-                }
-            ]
-        }
+# Check if running as root
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        if command -v dialog &> /dev/null && [[ -t 1 ]] && [[ -t 2 ]]; then
+            dialog --msgbox "This script must be run as root!" 7 50
+        else
+            echo "ERROR: This script must be run as root!" >&2
+            echo "Please run with: sudo bash install.sh" >&2
+        fi
+        exit 1
+    fi
+}
+
+# Check for required tools
+check_dependencies() {
+    local missing=()
+    
+    for cmd in dialog reflector cfdisk mkfs.btrfs mount umount pacstrap genfstab arch-chroot parted lsblk; do
+        if ! command -v "$cmd" &> /dev/null; then
+            missing+=("$cmd")
+        fi
+    done
+    
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        if command -v dialog &> /dev/null && [[ -t 1 ]] && [[ -t 2 ]]; then
+            dialog --msgbox "Missing required tools: ${missing[*]}\n\nPlease install:\n- dialog\n- reflector\n- arch-install-scripts\n- btrfs-progs\n- parted\n- util-linux" 12 60
+        else
+            echo "ERROR: Missing required tools: ${missing[*]}" >&2
+            echo "Please install: dialog reflector arch-install-scripts btrfs-progs parted util-linux" >&2
+        fi
+        exit 1
+    fi
+}
+
+# Welcome screen
+show_welcome() {
+    dialog --backtitle "Arch Linux Installer" \
+           --title "Welcome" \
+           --msgbox "Welcome to the Arch Linux Installation Script!\n\nThis installer will guide you through the installation process.\n\nPress OK to continue." 10 60
+}
+
+# Get root password
+get_root_password() {
+    while true; do
+        ROOT_PASSWORD=$(dialog --backtitle "Arch Linux Installer" \
+                                --title "Root Password" \
+                                --insecure \
+                                --passwordbox "Enter root password (leave blank to lock root account):" 10 60 3>&1 1>&2 2>&3)
+        local ret=$?
+        
+        if [[ $ret -ne 0 ]]; then
+            dialog --msgbox "Installation cancelled." 7 50
+            exit 1
+        fi
+        
+        if [[ -z "$ROOT_PASSWORD" ]]; then
+            dialog --backtitle "Arch Linux Installer" \
+                   --title "Lock Root Account" \
+                   --yesno "You left the root password blank.\n\nDo you want to lock the root account?\n(Recommended for security)" 10 60
+            
+            if [[ $? -eq 0 ]]; then
+                LOCK_ROOT=true
+                break
+            fi
+        else
+            ROOT_PASSWORD_CONFIRM=$(dialog --backtitle "Arch Linux Installer" \
+                                           --title "Confirm Root Password" \
+                                           --insecure \
+                                           --passwordbox "Re-enter root password:" 10 60 3>&1 1>&2 2>&3)
+            local ret=$?
+            
+            if [[ $ret -ne 0 ]]; then
+                continue
+            fi
+            
+            if [[ "$ROOT_PASSWORD" == "$ROOT_PASSWORD_CONFIRM" ]]; then
+                break
+            else
+                dialog --msgbox "Passwords do not match! Please try again." 7 50
+            fi
+        fi
+    done
+}
+
+# Get username
+get_username() {
+    while true; do
+        USERNAME=$(dialog --backtitle "Arch Linux Installer" \
+                          --title "Username" \
+                          --inputbox "Enter username for the new user:" 10 60 3>&1 1>&2 2>&3)
+        local ret=$?
+        
+        if [[ $ret -ne 0 ]]; then
+            dialog --msgbox "Installation cancelled." 7 50
+            exit 1
+        fi
+        
+        if [[ -z "$USERNAME" ]]; then
+            dialog --msgbox "Username cannot be empty!" 7 50
+            continue
+        fi
+        
+        # Validate username (lowercase letters, numbers, underscore, hyphen)
+        if [[ ! "$USERNAME" =~ ^[a-z][a-z0-9_-]*$ ]]; then
+            dialog --msgbox "Invalid username!\n\nUsername must:\n- Start with a lowercase letter\n- Contain only lowercase letters, numbers, underscore, or hyphen" 10 60
+            continue
+        fi
+        
+        break
+    done
+}
+
+# Get user password
+get_user_password() {
+    while true; do
+        USER_PASSWORD=$(dialog --backtitle "Arch Linux Installer" \
+                                --title "User Password" \
+                                --insecure \
+                                --passwordbox "Enter password for user '$USERNAME':" 10 60 3>&1 1>&2 2>&3)
+        local ret=$?
+        
+        if [[ $ret -ne 0 ]]; then
+            dialog --msgbox "Installation cancelled." 7 50
+            exit 1
+        fi
+        
+        if [[ -z "$USER_PASSWORD" ]]; then
+            dialog --msgbox "Password cannot be empty!" 7 50
+            continue
+        fi
+        
+        USER_PASSWORD_CONFIRM=$(dialog --backtitle "Arch Linux Installer" \
+                                       --title "Confirm User Password" \
+                                       --insecure \
+                                       --passwordbox "Re-enter password for user '$USERNAME':" 10 60 3>&1 1>&2 2>&3)
+        local ret=$?
+        
+        if [[ $ret -ne 0 ]]; then
+            continue
+        fi
+        
+        if [[ "$USER_PASSWORD" == "$USER_PASSWORD_CONFIRM" ]]; then
+            break
+        else
+            dialog --msgbox "Passwords do not match! Please try again." 7 50
+        fi
+    done
+}
+
+# Get country mirrors
+get_country_mirrors() {
+    # List of countries for mirrors
+    local countries=(
+        "United States" "US"
+        "Germany" "DE"
+        "United Kingdom" "GB"
+        "France" "FR"
+        "Netherlands" "NL"
+        "Sweden" "SE"
+        "Switzerland" "CH"
+        "Canada" "CA"
+        "Australia" "AU"
+        "Japan" "JP"
+        "China" "CN"
+        "India" "IN"
+        "Brazil" "BR"
+        "Russia" "RU"
+        "Poland" "PL"
+        "Italy" "IT"
+        "Spain" "ES"
+        "Belgium" "BE"
+        "Denmark" "DK"
+        "Finland" "FI"
+        "Norway" "NO"
+        "Austria" "AT"
+        "Czech Republic" "CZ"
+        "Greece" "GR"
+        "Ireland" "IE"
+        "Portugal" "PT"
+        "Singapore" "SG"
+        "South Korea" "KR"
+        "Taiwan" "TW"
     )
+    
+    # Create checklist
+    local checklist_items=()
+    for ((i=0; i<${#countries[@]}; i+=2)); do
+        checklist_items+=("${countries[i]}" "${countries[i+1]}" "off")
+    done
+    
+    local result=$(dialog --backtitle "Arch Linux Installer" \
+                          --title "Select Mirror Countries" \
+                          --checklist "Select one or more countries for mirror selection:\n(Use space to select, enter to confirm)" 20 60 15 \
+                          "${checklist_items[@]}" 3>&1 1>&2 2>&3)
+    local ret=$?
+    
+    if [[ $ret -ne 0 ]]; then
+        dialog --msgbox "Installation cancelled." 7 50
+        exit 1
+    fi
+    
+    SELECTED_COUNTRIES=($result)
+    
+    if [[ ${#SELECTED_COUNTRIES[@]} -eq 0 ]]; then
+        dialog --msgbox "No countries selected! Using default mirrors." 7 50
+        SELECTED_COUNTRIES=("US")
+    fi
+}
 
-# ==========================================
-# MODE 2: USE FREE SPACE
-# ==========================================
-elif mode == "free_space":
-    disk_wrapper["config"].append(
-        {
-            "device": disk,
-            "use_existing": True,
-            "filesystem_type": "btrfs",
-            "mount_options": ["compress=zstd"]
-        }
-    )
+# Update mirrors with reflector
+update_mirrors() {
+    dialog --infobox "Updating mirror list with reflector..." 5 50
+    
+    local country_list=$(IFS=','; echo "${SELECTED_COUNTRIES[*]}")
+    
+    reflector --country "$country_list" \
+              --protocol https \
+              --latest 20 \
+              --sort rate \
+              --save /etc/pacman.d/mirrorlist
+    
+    if [[ $? -eq 0 ]]; then
+        dialog --msgbox "Mirror list updated successfully!" 7 50
+    else
+        dialog --msgbox "Warning: Failed to update mirrors. Continuing with default mirrors." 8 60
+    fi
+}
 
-# ==========================================
-# MODE 3: MANUAL PARTITIONING (CFDISK)
-# ==========================================
-else:
-    parts_raw = subprocess.check_output(
-        ["lsblk", "-lnpo", "NAME,TYPE", disk]
-    ).decode().splitlines()
+# Get available disks
+get_disks() {
+    local disks=()
+    while IFS= read -r line; do
+        local disk=$(echo "$line" | awk '{print $1}')
+        local size=$(echo "$line" | awk '{print $2}')
+        local model=$(echo "$line" | awk '{for(i=3;i<=NF;i++) printf "%s ", $i; print ""}' | sed 's/[[:space:]]*$//')
+        disks+=("$disk" "$size - $model")
+    done < <(lsblk -dno NAME,SIZE,MODEL | grep -E '^sd[a-z]|^nvme|^vd[a-z]')
+    
+    if [[ ${#disks[@]} -eq 0 ]]; then
+        dialog --msgbox "No suitable disks found!" 7 50
+        exit 1
+    fi
+    
+    INSTALL_DISK=$(dialog --backtitle "Arch Linux Installer" \
+                          --title "Select Installation Disk" \
+                          --menu "Select the disk to install Arch Linux:" 15 60 8 \
+                          "${disks[@]}" 3>&1 1>&2 2>&3)
+    local ret=$?
+    
+    if [[ $ret -ne 0 ]] || [[ -z "$INSTALL_DISK" ]]; then
+        dialog --msgbox "No disk selected! Installation cancelled." 7 50
+        exit 1
+    fi
+}
 
-    partitions = [p.split()[0] for p in parts_raw if p.endswith("part")]
+# Get partition method
+get_partition_method() {
+    PARTITION_METHOD=$(dialog --backtitle "Arch Linux Installer" \
+                              --title "Partitioning Method" \
+                              --menu "Select partitioning method for $INSTALL_DISK:" 12 60 4 \
+                              "1" "Use full disk (WARNING: All data will be erased!)" \
+                              "2" "Use remaining free space" \
+                              "3" "Manual partitioning (cfdisk)" 3>&1 1>&2 2>&3)
+    local ret=$?
+    
+    if [[ $ret -ne 0 ]] || [[ -z "$PARTITION_METHOD" ]]; then
+        dialog --msgbox "No method selected! Installation cancelled." 7 50
+        exit 1
+    fi
+}
 
-    disk_wrapper["config"].append(
-        {
-            "device": disk,
-            "use_existing": True,
-            "partitions": [
-                {"device": part, "mountpoint": None}
-                for part in partitions
-            ]
-        }
-    )
+# Check if system is UEFI
+is_uefi() {
+    [[ -d /sys/firmware/efi ]]
+}
 
-# Attach fixed structure
-config["disk_config"] = disk_wrapper
+# Partition disk - full disk
+partition_full_disk() {
+    local disk="/dev/$INSTALL_DISK"
+    
+    dialog --backtitle "Arch Linux Installer" \
+           --title "WARNING" \
+           --yesno "WARNING: This will erase ALL data on $disk!\n\nAre you sure you want to continue?" 10 60
+    
+    if [[ $? -ne 0 ]]; then
+        exit 1
+    fi
+    
+    dialog --infobox "Partitioning $disk..." 5 50
+    
+    # Create partition table
+    if is_uefi; then
+        parted -s "$disk" mklabel gpt
+        # EFI partition (512MB)
+        parted -s "$disk" mkpart primary fat32 1MiB 513MiB
+        parted -s "$disk" set 1 esp on
+        # Root partition (rest of disk)
+        parted -s "$disk" mkpart primary btrfs 513MiB 100%
+    else
+        parted -s "$disk" mklabel msdos
+        # Root partition (entire disk)
+        parted -s "$disk" mkpart primary btrfs 1MiB 100%
+        parted -s "$disk" set 1 boot on
+    fi
+    
+    # Wait for partitions to be created
+    sleep 2
+    
+    # Set partition variables
+    if is_uefi; then
+        if [[ "$INSTALL_DISK" =~ ^nvme ]]; then
+            EFI_PARTITION="${disk}p1"
+            ROOT_PARTITION="${disk}p2"
+        else
+            EFI_PARTITION="${disk}1"
+            ROOT_PARTITION="${disk}2"
+        fi
+    else
+        if [[ "$INSTALL_DISK" =~ ^nvme ]]; then
+            ROOT_PARTITION="${disk}p1"
+        else
+            ROOT_PARTITION="${disk}1"
+        fi
+    fi
+}
 
-with open("auto_config.json", "w") as f:
-    json.dump(config, f, indent=4)
+# Partition disk - free space
+partition_free_space() {
+    local disk="/dev/$INSTALL_DISK"
+    
+    dialog --infobox "Checking for free space on $disk..." 5 50
+    
+    # Get free space information
+    local free_info=$(parted -s "$disk" print free | grep "Free Space" | tail -1)
+    
+    if [[ -z "$free_info" ]]; then
+        dialog --msgbox "No free space found on $disk!\n\nPlease select a different disk or use full disk option." 10 60
+        exit 1
+    fi
+    
+    # Extract start and end from free space (format: "Free Space  1024MiB  2048MiB")
+    local start=$(echo "$free_info" | awk '{print $3}' | sed 's/MiB//')
+    local end=$(echo "$free_info" | awk '{print $4}' | sed 's/MiB//')
+    
+    if [[ -z "$start" ]] || [[ -z "$end" ]] || [[ "$start" == "$end" ]]; then
+        dialog --msgbox "No sufficient free space found on $disk!\n\nPlease select a different disk or use full disk option." 10 60
+        exit 1
+    fi
+    
+    dialog --infobox "Creating partition in free space..." 5 50
+    
+    # Create partition in free space
+    if is_uefi; then
+        # Check if EFI partition exists
+        local efi_exists=$(parted -s "$disk" print | grep -c "esp" || true)
+        if [[ "$efi_exists" -eq 0 ]]; then
+            # Check if we have enough space for EFI partition (512MB)
+            local efi_end=$((start + 512))
+            if [[ $efi_end -lt $end ]]; then
+                parted -s "$disk" mkpart primary fat32 "${start}MiB" "${efi_end}MiB"
+                local efi_part_num=$(parted -s "$disk" print | grep -v "^$" | tail -1 | awk '{print $1}')
+                parted -s "$disk" set "$efi_part_num" esp on
+                start=$efi_end
+                
+                # Set EFI partition path
+                if [[ "$INSTALL_DISK" =~ ^nvme ]]; then
+                    EFI_PARTITION="${disk}p${efi_part_num}"
+                else
+                    EFI_PARTITION="${disk}${efi_part_num}"
+                fi
+            fi
+        else
+            # Find existing EFI partition
+            local efi_part_num=$(parted -s "$disk" print | grep "esp" | awk '{print $1}')
+            if [[ "$INSTALL_DISK" =~ ^nvme ]]; then
+                EFI_PARTITION="${disk}p${efi_part_num}"
+            else
+                EFI_PARTITION="${disk}${efi_part_num}"
+            fi
+        fi
+        # Create root partition
+        parted -s "$disk" mkpart primary btrfs "${start}MiB" "${end}MiB"
+    else
+        parted -s "$disk" mkpart primary btrfs "${start}MiB" "${end}MiB"
+        local root_part_num=$(parted -s "$disk" print | tail -1 | awk '{print $1}')
+        parted -s "$disk" set "$root_part_num" boot on
+    fi
+    
+    sleep 2
+    
+    # Set root partition variable
+    local root_part_num=$(parted -s "$disk" print | grep -v "^$" | tail -1 | awk '{print $1}')
+    if [[ "$INSTALL_DISK" =~ ^nvme ]]; then
+        ROOT_PARTITION="${disk}p${root_part_num}"
+    else
+        ROOT_PARTITION="${disk}${root_part_num}"
+    fi
+}
 
+# Partition disk - manual
+partition_manual() {
+    local disk="/dev/$INSTALL_DISK"
+    
+    dialog --msgbox "You will now be taken to cfdisk for manual partitioning.\n\nAfter partitioning:\n- Make sure you have a root partition (btrfs)\n- If UEFI, make sure you have an EFI partition (fat32, ~512MB)\n- Mark EFI partition as ESP/boot if UEFI\n- Mark root partition as boot if BIOS\n\nPress OK to continue." 12 60
+    
+    cfdisk "$disk"
+    
+    dialog --msgbox "Please enter the partition numbers:\n\n(Check with: lsblk /dev/$INSTALL_DISK)" 10 60
+    
+    if is_uefi; then
+        local efi_part=$(dialog --backtitle "Arch Linux Installer" \
+                                --title "EFI Partition" \
+                                --inputbox "Enter EFI partition number (e.g., 1):" 10 60 3>&1 1>&2 2>&3)
+        local ret=$?
+        
+        if [[ $ret -ne 0 ]] || [[ -z "$efi_part" ]]; then
+            dialog --msgbox "EFI partition number required!" 7 50
+            exit 1
+        fi
+        
+        if [[ "$INSTALL_DISK" =~ ^nvme ]]; then
+            EFI_PARTITION="${disk}p${efi_part}"
+        else
+            EFI_PARTITION="${disk}${efi_part}"
+        fi
+    fi
+    
+    local root_part=$(dialog --backtitle "Arch Linux Installer" \
+                             --title "Root Partition" \
+                             --inputbox "Enter root partition number (e.g., 2):" 10 60 3>&1 1>&2 2>&3)
+    local ret=$?
+    
+    if [[ $ret -ne 0 ]] || [[ -z "$root_part" ]]; then
+        dialog --msgbox "Root partition number required!" 7 50
+        exit 1
+    fi
+    
+    if [[ "$INSTALL_DISK" =~ ^nvme ]]; then
+        ROOT_PARTITION="${disk}p${root_part}"
+    else
+        ROOT_PARTITION="${disk}${root_part}"
+    fi
+}
+
+# Format partitions
+format_partitions() {
+    dialog --infobox "Formatting partitions..." 5 50
+    
+    # Format EFI partition if UEFI
+    if is_uefi && [[ -n "$EFI_PARTITION" ]]; then
+        mkfs.fat -F32 "$EFI_PARTITION"
+    fi
+    
+    # Format root partition with btrfs
+    mkfs.btrfs -f "$ROOT_PARTITION"
+    
+    # Mount root partition
+    mount "$ROOT_PARTITION" "$MOUNT_POINT"
+    
+    # Create btrfs subvolumes
+    btrfs subvolume create "$MOUNT_POINT/@"
+    btrfs subvolume create "$MOUNT_POINT/@home"
+    btrfs subvolume create "$MOUNT_POINT/@var"
+    btrfs subvolume create "$MOUNT_POINT/@snapshots"
+    
+    # Unmount to remount with subvolumes
+    umount "$MOUNT_POINT"
+    
+    # Mount with subvolumes
+    mount -o subvol=@,compress=zstd,noatime "$ROOT_PARTITION" "$MOUNT_POINT"
+    
+    # Create mount points
+    mkdir -p "$MOUNT_POINT/home"
+    mkdir -p "$MOUNT_POINT/var"
+    mkdir -p "$MOUNT_POINT/.snapshots"
+    
+    # Mount subvolumes
+    mount -o subvol=@home,compress=zstd,noatime "$ROOT_PARTITION" "$MOUNT_POINT/home"
+    mount -o subvol=@var,compress=zstd,noatime "$ROOT_PARTITION" "$MOUNT_POINT/var"
+    mount -o subvol=@snapshots,compress=zstd,noatime "$ROOT_PARTITION" "$MOUNT_POINT/.snapshots"
+    
+    # Mount EFI partition if UEFI
+    if is_uefi && [[ -n "$EFI_PARTITION" ]]; then
+        mkdir -p "$MOUNT_POINT/boot/efi"
+        mount "$EFI_PARTITION" "$MOUNT_POINT/boot/efi"
+    fi
+}
+
+# Install base system
+install_base() {
+    dialog --infobox "Installing base system and essential packages..." 5 60
+    
+    # Base packages
+    pacstrap "$MOUNT_POINT" base base-devel linux linux-headers linux-firmware \
+             btrfs-progs networkmanager dialog reflector nano vim sudo \
+             grub efibootmgr dosfstools os-prober mtools
+    
+    if [[ $? -ne 0 ]]; then
+        dialog --msgbox "Error installing base system!" 7 50
+        exit 1
+    fi
+}
+
+# Generate fstab
+generate_fstab() {
+    dialog --infobox "Generating fstab..." 5 50
+    genfstab -U "$MOUNT_POINT" >> "$MOUNT_POINT/etc/fstab"
+    
+    # Update fstab with subvolume options
+    sed -i 's|subvol=@|subvol=@,compress=zstd,noatime|g' "$MOUNT_POINT/etc/fstab"
+    sed -i 's|subvol=@home|subvol=@home,compress=zstd,noatime|g' "$MOUNT_POINT/etc/fstab"
+    sed -i 's|subvol=@var|subvol=@var,compress=zstd,noatime|g' "$MOUNT_POINT/etc/fstab"
+    sed -i 's|subvol=@snapshots|subvol=@snapshots,compress=zstd,noatime|g' "$MOUNT_POINT/etc/fstab"
+}
+
+# Configure system
+configure_system() {
+    dialog --infobox "Configuring system..." 5 50
+    
+    # Set timezone
+    arch-chroot "$MOUNT_POINT" ln -sf /usr/share/zoneinfo/UTC /etc/localtime
+    arch-chroot "$MOUNT_POINT" hwclock --systohc
+    
+    # Generate locale
+    sed -i 's/#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' "$MOUNT_POINT/etc/locale.gen"
+    arch-chroot "$MOUNT_POINT" locale-gen
+    echo "LANG=en_US.UTF-8" > "$MOUNT_POINT/etc/locale.conf"
+    
+    # Set hostname
+    echo "archlinux" > "$MOUNT_POINT/etc/hostname"
+    
+    # Configure hosts file
+    cat > "$MOUNT_POINT/etc/hosts" <<EOF
+127.0.0.1	localhost
+::1		localhost
+127.0.1.1	archlinux.localdomain	archlinux
 EOF
+    
+    # Configure root password or lock account
+    if [[ "$LOCK_ROOT" == true ]]; then
+        arch-chroot "$MOUNT_POINT" passwd -l root 2>/dev/null || true
+    else
+        echo "root:$ROOT_PASSWORD" | arch-chroot "$MOUNT_POINT" chpasswd
+    fi
+    
+    # Create user
+    arch-chroot "$MOUNT_POINT" useradd -m -G wheel,audio,video,optical,storage "$USERNAME"
+    echo "$USERNAME:$USER_PASSWORD" | arch-chroot "$MOUNT_POINT" chpasswd
+    
+    # Configure sudo
+    sed -i 's/# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' "$MOUNT_POINT/etc/sudoers"
+    
+    # Enable NetworkManager
+    arch-chroot "$MOUNT_POINT" systemctl enable NetworkManager
+    
+    # Install and configure GRUB
+    if is_uefi; then
+        arch-chroot "$MOUNT_POINT" grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
+    else
+        arch-chroot "$MOUNT_POINT" grub-install --target=i386-pc "/dev/$INSTALL_DISK"
+    fi
+    
+    arch-chroot "$MOUNT_POINT" grub-mkconfig -o /boot/grub/grub.cfg
+}
 
-# ==========================================
-# EXECUTE ARCHINSTALL
-# ==========================================
+# Main installation function
+main() {
+    check_tty
+    check_root
+    check_dependencies
+    show_welcome
+    get_root_password
+    get_username
+    get_user_password
+    get_country_mirrors
+    update_mirrors
+    get_disks
+    get_partition_method
+    
+    # Partition based on method
+    case "$PARTITION_METHOD" in
+        "1")
+            partition_full_disk
+            ;;
+        "2")
+            partition_free_space
+            ;;
+        "3")
+            partition_manual
+            ;;
+    esac
+    
+    # Confirm before proceeding
+    dialog --backtitle "Arch Linux Installer" \
+           --title "Confirm Installation" \
+           --yesno "Ready to install Arch Linux!\n\nDisk: $INSTALL_DISK\nRoot Partition: $ROOT_PARTITION\nUsername: $USERNAME\n\nContinue with installation?" 12 60
+    
+    if [[ $? -ne 0 ]]; then
+        dialog --msgbox "Installation cancelled." 7 50
+        exit 1
+    fi
+    
+    format_partitions
+    install_base
+    generate_fstab
+    configure_system
+    
+    dialog --backtitle "Arch Linux Installer" \
+           --title "Installation Complete" \
+           --msgbox "Installation completed successfully!\n\nYou can now reboot into your new Arch Linux system.\n\nRemember to:\n- Unmount /mnt if needed\n- Remove installation media\n- Reboot the system" 12 60
+}
 
-echo -e "${GREEN}Starting Archinstall...${NC}"
-
-archinstall --config auto_config.json --silent --debug
-
-EXIT_CODE=$?
-rm -f auto_config.json
-
-if [[ $EXIT_CODE -eq 0 ]]; then
-    echo -e "${GREEN}=== SUCCESS ===${NC}"
-else
-    echo -e "${RED}Failed. Check /var/log/archinstall/install.log${NC}"
-fi
+# Run main function
+main
