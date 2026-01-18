@@ -141,6 +141,9 @@ LOCK_ROOT=false
 USERNAME=""
 USER_PASSWORD=""
 SELECTED_COUNTRIES=()
+TIMEZONE=""
+KEYBOARD_LAYOUTS=()
+LOCALE=""
 INSTALL_DISK=""
 PARTITION_METHOD=""
 MOUNT_POINT="/mnt"
@@ -160,11 +163,29 @@ check_root() {
     fi
 }
 
+# Install dialog if missing (required for TUI)
+install_dialog_if_missing() {
+    if ! command -v dialog &> /dev/null; then
+        echo "Installing dialog package..." >&2
+        if command -v pacman &> /dev/null; then
+            pacman -Sy --noconfirm dialog || {
+                echo "ERROR: Failed to install dialog. Please install it manually: pacman -Sy dialog" >&2
+                exit 1
+            }
+        else
+            echo "ERROR: pacman not found. Cannot install dialog automatically." >&2
+            echo "Please install dialog manually before running this script." >&2
+            exit 1
+        fi
+    fi
+}
+
 # Check for required tools
 check_dependencies() {
     local missing=()
     
-    for cmd in dialog reflector cfdisk mkfs.btrfs mount umount pacstrap genfstab arch-chroot parted lsblk; do
+    # Dialog is now auto-installed, so we don't check for it here
+    for cmd in reflector cfdisk mkfs.btrfs mount umount pacstrap genfstab arch-chroot parted lsblk; do
         if ! command -v "$cmd" &> /dev/null; then
             missing+=("$cmd")
         fi
@@ -172,10 +193,10 @@ check_dependencies() {
     
     if [[ ${#missing[@]} -gt 0 ]]; then
         if command -v dialog &> /dev/null && [[ -t 1 ]] && [[ -t 2 ]]; then
-            dialog --msgbox "Missing required tools: ${missing[*]}\n\nPlease install:\n- dialog\n- reflector\n- arch-install-scripts\n- btrfs-progs\n- parted\n- util-linux" 12 60
+            dialog --msgbox "Missing required tools: ${missing[*]}\n\nPlease install:\n- reflector\n- arch-install-scripts\n- btrfs-progs\n- parted\n- util-linux" 12 60
         else
             echo "ERROR: Missing required tools: ${missing[*]}" >&2
-            echo "Please install: dialog reflector arch-install-scripts btrfs-progs parted util-linux" >&2
+            echo "Please install: reflector arch-install-scripts btrfs-progs parted util-linux" >&2
         fi
         exit 1
     fi
@@ -294,6 +315,202 @@ get_user_password() {
             dialog --msgbox "Passwords do not match! Please try again." 7 50
         fi
     done
+}
+
+# Get timezone
+get_timezone() {
+    # Use timedatectl list-timezones if available (simpler)
+    if command -v timedatectl &> /dev/null; then
+        local timezones=()
+        while IFS= read -r tz; do
+            if [[ -n "$tz" ]]; then
+                local display_name=$(echo "$tz" | sed 's|_| |g' | sed 's|/| - |g')
+                timezones+=("$tz" "$display_name")
+            fi
+        done < <(timedatectl list-timezones | head -100)
+        
+        if [[ ${#timezones[@]} -gt 0 ]]; then
+            TIMEZONE=$(dialog --backtitle "Arch Linux Installer" \
+                              --title "Select Timezone" \
+                              --menu "Select your timezone:" 20 60 15 \
+                              "${timezones[@]}" 3>&1 1>&2 2>&3)
+            local ret=$?
+            
+            if [[ $ret -ne 0 ]] || [[ -z "$TIMEZONE" ]]; then
+                TIMEZONE="UTC"
+            fi
+            return 0
+        fi
+    fi
+    
+    # Fallback: Get list of timezones (regions) from /usr/share/zoneinfo
+    local regions=()
+    if [[ -d /usr/share/zoneinfo ]]; then
+        while IFS= read -r region; do
+            if [[ -n "$region" ]] && [[ -d "/usr/share/zoneinfo/$region" ]] && [[ ! "$region" =~ ^(right|posix|SystemV|Etc)$ ]]; then
+                regions+=("$region" "$region")
+            fi
+        done < <(find /usr/share/zoneinfo -maxdepth 1 -type d ! -path /usr/share/zoneinfo | sort | sed 's|/usr/share/zoneinfo/||' | head -30)
+    fi
+    
+    if [[ ${#regions[@]} -eq 0 ]]; then
+        # Fallback if timezone info not available
+        TIMEZONE="UTC"
+        return 0
+    fi
+    
+    local selected_region=$(dialog --backtitle "Arch Linux Installer" \
+                                   --title "Select Timezone Region" \
+                                   --menu "Select your timezone region:" 20 60 12 \
+                                   "${regions[@]}" 3>&1 1>&2 2>&3)
+    local ret=$?
+    
+    if [[ $ret -ne 0 ]] || [[ -z "$selected_region" ]]; then
+        TIMEZONE="UTC"
+        return 0
+    fi
+    
+    # Get cities in selected region
+    local cities=()
+    if [[ -d "/usr/share/zoneinfo/$selected_region" ]]; then
+        while IFS= read -r city; do
+            if [[ -n "$city" ]] && [[ -f "/usr/share/zoneinfo/$selected_region/$city" ]] && [[ ! "$city" =~ \.tab$ ]]; then
+                cities+=("$city" "$city")
+            fi
+        done < <(find "/usr/share/zoneinfo/$selected_region" -maxdepth 1 -type f | sort | sed "s|/usr/share/zoneinfo/$selected_region/||" | head -30)
+    fi
+    
+    if [[ ${#cities[@]} -eq 0 ]]; then
+        TIMEZONE="$selected_region"
+        return 0
+    fi
+    
+    local selected_city=$(dialog --backtitle "Arch Linux Installer" \
+                                 --title "Select City" \
+                                 --menu "Select your city in $selected_region:" 20 60 12 \
+                                 "${cities[@]}" 3>&1 1>&2 2>&3)
+    ret=$?
+    
+    if [[ $ret -ne 0 ]] || [[ -z "$selected_city" ]]; then
+        TIMEZONE="$selected_region"
+    else
+        TIMEZONE="$selected_region/$selected_city"
+    fi
+}
+
+# Get keyboard layouts
+get_keyboard_layouts() {
+    # Get list of available keyboard layouts
+    local layouts=()
+    
+    # Try using localectl if available
+    if command -v localectl &> /dev/null; then
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^[[:space:]]*([a-z]{2}(_[A-Z]{2})?)[[:space:]]+.*$ ]]; then
+                local layout="${BASH_REMATCH[1]}"
+                local desc=$(echo "$line" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')
+                layouts+=("$layout" "$desc")
+            fi
+        done < <(localectl list-keymaps 2>/dev/null | head -50)
+    fi
+    
+    # Fallback: try reading from X11 rules
+    if [[ ${#layouts[@]} -eq 0 ]] && [[ -f /usr/share/X11/xkb/rules/base.lst ]]; then
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^[[:space:]]*([a-z]{2})[[:space:]]+.*$ ]]; then
+                local layout="${BASH_REMATCH[1]}"
+                local desc=$(echo "$line" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')
+                layouts+=("$layout" "$desc")
+            fi
+        done < <(grep "^[[:space:]]*[a-z]\{2\}[[:space:]]" /usr/share/X11/xkb/rules/base.lst | head -50)
+    fi
+    
+    # Fallback common layouts if nothing found
+    if [[ ${#layouts[@]} -eq 0 ]]; then
+        layouts=(
+            "us" "English (US)"
+            "uk" "English (UK)"
+            "de" "German"
+            "fr" "French"
+            "es" "Spanish"
+            "it" "Italian"
+            "pt" "Portuguese"
+            "ru" "Russian"
+            "jp" "Japanese"
+            "cn" "Chinese"
+            "tr" "Turkish"
+            "pl" "Polish"
+            "nl" "Dutch"
+            "sv" "Swedish"
+            "no" "Norwegian"
+            "da" "Danish"
+            "fi" "Finnish"
+        )
+    fi
+    
+    local result=$(dialog --backtitle "Arch Linux Installer" \
+                          --title "Select Keyboard Layouts" \
+                          --checklist "Select one or more keyboard layouts:\n(Use space to select, enter to confirm)" 20 60 15 \
+                          "${layouts[@]}" 3>&1 1>&2 2>&3)
+    local ret=$?
+    
+    if [[ $ret -ne 0 ]]; then
+        dialog --msgbox "Installation cancelled." 7 50
+        exit 1
+    fi
+    
+    KEYBOARD_LAYOUTS=($result)
+    
+    # Default to US if nothing selected
+    if [[ ${#KEYBOARD_LAYOUTS[@]} -eq 0 ]]; then
+        KEYBOARD_LAYOUTS=("us")
+        dialog --msgbox "No keyboard layouts selected. Using 'us' as default." 7 50
+    fi
+}
+
+# Get locale (single selection)
+get_locale() {
+    # Get list of available locales
+    local locales=()
+    if [[ -f /etc/locale.gen ]]; then
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^#?([a-z]{2}_[A-Z]{2}\.UTF-8) ]]; then
+                local locale="${BASH_REMATCH[1]}"
+                # Remove comment marker if present
+                locale=$(echo "$locale" | sed 's/^#//')
+                # Create display name
+                local display_name=$(echo "$locale" | sed 's/_/ /g' | sed 's/\.UTF-8//')
+                locales+=("$locale" "$display_name")
+            fi
+        done < /etc/locale.gen
+    fi
+    
+    # Fallback common locales if file not found
+    if [[ ${#locales[@]} -eq 0 ]]; then
+        locales=(
+            "en_US.UTF-8" "English (US)"
+            "en_GB.UTF-8" "English (UK)"
+            "de_DE.UTF-8" "German"
+            "fr_FR.UTF-8" "French"
+            "es_ES.UTF-8" "Spanish"
+            "it_IT.UTF-8" "Italian"
+            "pt_BR.UTF-8" "Portuguese (Brazil)"
+            "ru_RU.UTF-8" "Russian"
+            "ja_JP.UTF-8" "Japanese"
+            "zh_CN.UTF-8" "Chinese (Simplified)"
+        )
+    fi
+    
+    LOCALE=$(dialog --backtitle "Arch Linux Installer" \
+                    --title "Select Locale" \
+                    --menu "Select your locale:" 20 60 15 \
+                    "${locales[@]}" 3>&1 1>&2 2>&3)
+    local ret=$?
+    
+    if [[ $ret -ne 0 ]] || [[ -z "$LOCALE" ]]; then
+        LOCALE="en_US.UTF-8"
+        dialog --msgbox "No locale selected. Using 'en_US.UTF-8' as default." 7 50
+    fi
 }
 
 # Get country mirrors
@@ -641,7 +858,7 @@ install_base() {
     
     # Base packages
     pacstrap "$MOUNT_POINT" base base-devel linux linux-headers linux-firmware \
-             btrfs-progs networkmanager dialog reflector nano vim sudo \
+             btrfs-progs networkmanager dialog reflector nano sudo \
              grub efibootmgr dosfstools os-prober mtools
     
     if [[ $? -ne 0 ]]; then
@@ -667,13 +884,51 @@ configure_system() {
     dialog --infobox "Configuring system..." 5 50
     
     # Set timezone
-    arch-chroot "$MOUNT_POINT" ln -sf /usr/share/zoneinfo/UTC /etc/localtime
+    if [[ -n "$TIMEZONE" ]] && [[ -f "/usr/share/zoneinfo/$TIMEZONE" ]]; then
+        arch-chroot "$MOUNT_POINT" ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
+    else
+        arch-chroot "$MOUNT_POINT" ln -sf /usr/share/zoneinfo/UTC /etc/localtime
+    fi
     arch-chroot "$MOUNT_POINT" hwclock --systohc
     
+    # Configure keyboard layouts
+    if [[ ${#KEYBOARD_LAYOUTS[@]} -gt 0 ]]; then
+        local keymap_line="KEYMAP=${KEYBOARD_LAYOUTS[0]}"
+        echo "$keymap_line" > "$MOUNT_POINT/etc/vconsole.conf"
+        
+        # Set additional layouts in X11 config (if X11 is installed later)
+        mkdir -p "$MOUNT_POINT/etc/X11/xorg.conf.d"
+        cat > "$MOUNT_POINT/etc/X11/xorg.conf.d/00-keyboard.conf" <<EOF
+Section "InputClass"
+    Identifier "system-keyboard"
+    MatchIsKeyboard "on"
+    Option "XkbLayout" "$(IFS=,; echo "${KEYBOARD_LAYOUTS[*]}")"
+    Option "XkbModel" "pc105"
+    Option "XkbOptions" "grp:alt_shift_toggle"
+EndSection
+EOF
+        
+        # Set systemd-localed if available (for systemd)
+        if [[ -f "$MOUNT_POINT/usr/bin/localectl" ]]; then
+            arch-chroot "$MOUNT_POINT" localectl set-keymap "${KEYBOARD_LAYOUTS[0]}" 2>/dev/null || true
+        fi
+    fi
+    
     # Generate locale
-    sed -i 's/#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' "$MOUNT_POINT/etc/locale.gen"
-    arch-chroot "$MOUNT_POINT" locale-gen
-    echo "LANG=en_US.UTF-8" > "$MOUNT_POINT/etc/locale.conf"
+    if [[ -n "$LOCALE" ]]; then
+        # Uncomment locale in locale.gen
+        sed -i "s|^#\($LOCALE\)|\1|" "$MOUNT_POINT/etc/locale.gen"
+        arch-chroot "$MOUNT_POINT" locale-gen
+        
+        # Set default locale
+        echo "LANG=$LOCALE" > "$MOUNT_POINT/etc/locale.conf"
+        echo "LC_ALL=$LOCALE" >> "$MOUNT_POINT/etc/locale.conf"
+    else
+        # Fallback to en_US.UTF-8
+        sed -i 's/#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' "$MOUNT_POINT/etc/locale.gen"
+        arch-chroot "$MOUNT_POINT" locale-gen
+        echo "LANG=en_US.UTF-8" > "$MOUNT_POINT/etc/locale.conf"
+    fi
     
     # Set hostname
     echo "archlinux" > "$MOUNT_POINT/etc/hostname"
@@ -714,14 +969,18 @@ EOF
 
 # Main installation function
 main() {
+    check_root
+    install_dialog_if_missing
     check_tty
     setup_dialog_colors
-    check_root
     check_dependencies
     show_welcome
     get_root_password
     get_username
     get_user_password
+    get_timezone
+    get_keyboard_layouts
+    get_locale
     get_country_mirrors
     update_mirrors
     get_disks
@@ -757,7 +1016,7 @@ main() {
     
     dialog --backtitle "Arch Linux Installer" \
            --title "Installation Complete" \
-           --msgbox "Installation completed successfully!\n\nYou can now reboot into your new Arch Linux system.\n\nRemember to:\n- Unmount /mnt if needed\n- Remove installation media\n- Reboot the system" 12 60
+           --msgbox "Installation completed successfully!\n\nYou can now reboot into your new Arch Linux system.\n\nNote: You don't need to unmount /mnt before rebooting.\nThe system will handle it automatically.\n\nRemember to:\n- Remove installation media\n- Reboot the system (reboot)" 12 60
 }
 
 # Run main function
