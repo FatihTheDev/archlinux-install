@@ -468,7 +468,7 @@ get_keyboard_layouts() {
     fi
 }
 
-# Get locale (single selection)
+# Get locale
 get_locale() {
     # 1. Set the default immediately
     LOCALE="en_US.UTF-8"
@@ -1069,8 +1069,9 @@ main() {
     
     dialog --backtitle "Arch Linux Installer" \
            --title "Installation Complete" \
-           --msgbox "Installation completed successfully!\n\nYou can now reboot into your new Arch Linux system.\n\nNote: You don't need to unmount /mnt before rebooting.\nThe system will handle it automatically.\n\nRemember to:\n- Remove installation media\n- Reboot the system (reboot)" 12 60
+           --msgbox "Installation completed successfully!\n\nYou can now reboot into your new Arch Linux system.\n\nRemember to:\n- Remove installation media\n- Reboot the system (reboot)" 12 60
 }
 
 # Run main function
 main
+
