@@ -147,23 +147,6 @@ check_root() {
 }
 
 # Install dialog if missing (required for TUI)
-install_wget_if_missing() {
-    if ! command -v wget &> /dev/null; then
-        echo "Installing wget..." >&2
-        if command -v pacman &> /dev/null; then
-            pacman -Sy --noconfirm wget || {
-                echo "ERROR: Failed to install wget. Please install it manually: pacman -Sy wget" >&2
-                            exit 1
-                        }
-                else
-                    echo "ERROR: pacman not found. Cannot install wget automatically." >&2
-                    echo "Please install wget manually before running this script." >&2
-                    exit 1
-        fi
-    fi
-}
-
-# Install dialog if missing (required for TUI)
 install_dialog_if_missing() {
     if ! command -v dialog &> /dev/null; then
         echo "Installing dialog package..." >&2
@@ -1010,7 +993,6 @@ arch-chroot "$MOUNT_POINT" grub-mkconfig -o /boot/grub/grub.cfg
 # Main installation function
 main() {
     check_root
-    install_wget_if_missing
     install_dialog_if_missing
     check_tty
     setup_dialog_colors
