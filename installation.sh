@@ -932,6 +932,7 @@ EOF
 if [[ -f "$MOUNT_POINT/usr/bin/localectl" ]]; then
     arch-chroot "$MOUNT_POINT" localectl set-keymap "${KEYBOARD_LAYOUTS[0]}" 2>/dev/null || true
 fi
+    fi
 
     # Generate locale
     if [[ -n "$LOCALE" ]]; then
@@ -1043,4 +1044,3 @@ main() {
 
 # Run main function
 main
-
