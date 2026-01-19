@@ -474,30 +474,26 @@ get_locale() {
     LOCALE="en_US.UTF-8"
 
     # 2. Ask the user if they want to change the default
-    dialog --backtitle "Arch Linux Installer" \
-           --title "Locale Selection" \
-           --yesno "The default locale is configured as 'en_US.UTF-8'.\n\nDo you wish to select a different one?" 10 60
-    
-    # Capture the user's choice (0 = Yes, 1 = No)
-    local response=$?
-
-    # 3. If User says YES (0), generate list and show menu
-    if [[ $response -eq 0 ]]; then
+    # We use 'if' directly here. This prevents 'set -e' from killing the script
+    # when the user selects "No" (which returns exit code 1).
+    if dialog --backtitle "Arch Linux Installer" \
+              --title "Locale Selection" \
+              --yesno "The default locale is configured as 'en_US.UTF-8'.\n\nDo you wish to select a different one?" 10 60; then
         
         # Get list of available locales
         local locales=()
+
         if [[ -f /etc/locale.gen ]]; then
             while IFS= read -r line; do
                 if [[ "$line" =~ ^#?([a-z]{2}_[A-Z]{2}\.UTF-8) ]]; then
                     local locale="${BASH_REMATCH[1]}"
-                    
                     local display_name=$(echo "$locale" | sed 's/_/ /g' | sed 's/\.UTF-8//')
                     locales+=("$locale" "$display_name")
                 fi
             done < /etc/locale.gen
         fi
         
-        # Fallback common locales if file parsing failed or was empty
+        # Fallback common locales
         if [[ ${#locales[@]} -eq 0 ]]; then
             locales=(
                 "en_US.UTF-8" "English (US)"
@@ -513,6 +509,7 @@ get_locale() {
             )
         fi
         
+        # Show the selection menu
         local SELECTED_LOCALE
         SELECTED_LOCALE=$(dialog --backtitle "Arch Linux Installer" \
                                 --title "Select Locale" \
@@ -525,12 +522,13 @@ get_locale() {
         if [[ $ret -eq 0 ]] && [[ -n "$SELECTED_LOCALE" ]]; then
             LOCALE="$SELECTED_LOCALE"
         else
-            # If they entered the menu but hit Cancel/Esc, notify them we represent to default
             dialog --msgbox "Selection cancelled. Reverting to default: 'en_US.UTF-8'." 7 50
         fi
+
+    else
+        : 
     fi
 }
-
 
 # Get country mirrors
 get_country_mirrors() {
