@@ -212,39 +212,49 @@ show_welcome() {
 # Get root password
 get_root_password() {
     while true; do
+        # 1. Ask for the password
         ROOT_PASSWORD=$(dialog --backtitle "Arch Linux Installer" \
                                 --title "Root Password" \
                                 --insecure \
                                 --passwordbox "Enter root password (leave blank to lock root account):" 10 60 3>&1 1>&2 2>&3)
-        local ret=$?
         
-        if [[ $ret -ne 0 ]]; then
+        # If user hits 'Cancel' (exit code 1) on the main prompt, exit the installer
+        if [[ $? -ne 0 ]]; then
             dialog --msgbox "Installation cancelled." 7 50
             exit 1
         fi
         
+        # 2. Handle Blank Password (Root Locking)
         if [[ -z "$ROOT_PASSWORD" ]]; then
             dialog --backtitle "Arch Linux Installer" \
                    --title "Lock Root Account" \
                    --yesno "You left the root password blank.\n\nDo you want to lock the root account?\n(Recommended for security)" 10 60
             
-            if [[ $? -eq 0 ]]; then
-                LOCK_ROOT=true
-                break
-            fi
+            case $? in
+                0) # User selected "Yes"
+                    LOCK_ROOT=true
+                    return 0 # Exit function successfully
+                    ;;
+                *) # User selected "No" or "ESC"
+                    continue # Restart the loop to ask for password again
+                    ;;
+            esac
+        
+        # 3. Handle Password Confirmation
         else
             ROOT_PASSWORD_CONFIRM=$(dialog --backtitle "Arch Linux Installer" \
                                            --title "Confirm Root Password" \
                                            --insecure \
                                            --passwordbox "Re-enter root password:" 10 60 3>&1 1>&2 2>&3)
-            local ret=$?
             
-            if [[ $ret -ne 0 ]]; then
+            # If user hits 'Cancel' during confirmation, go back to the first prompt
+            if [[ $? -ne 0 ]]; then
                 continue
             fi
             
             if [[ "$ROOT_PASSWORD" == "$ROOT_PASSWORD_CONFIRM" ]]; then
-                break
+                LOCK_ROOT=false
+                break # Exit the loop, passwords match
             else
                 dialog --msgbox "Passwords do not match! Please try again." 7 50
             fi
