@@ -470,48 +470,67 @@ get_keyboard_layouts() {
 
 # Get locale (single selection)
 get_locale() {
-    # Get list of available locales
-    local locales=()
-    if [[ -f /etc/locale.gen ]]; then
-        while IFS= read -r line; do
-            if [[ "$line" =~ ^#?([a-z]{2}_[A-Z]{2}\.UTF-8) ]]; then
-                local locale="${BASH_REMATCH[1]}"
-                # Remove comment marker if present
-                locale=$(echo "$locale" | sed 's/^#//')
-                # Create display name
-                local display_name=$(echo "$locale" | sed 's/_/ /g' | sed 's/\.UTF-8//')
-                locales+=("$locale" "$display_name")
-            fi
-        done < /etc/locale.gen
-    fi
+    # 1. Set the default immediately
+    LOCALE="en_US.UTF-8"
+
+    # 2. Ask the user if they want to change the default
+    dialog --backtitle "Arch Linux Installer" \
+           --title "Locale Selection" \
+           --yesno "The default locale is configured as 'en_US.UTF-8'.\n\nDo you wish to select a different one?" 10 60
     
-    # Fallback common locales if file not found
-    if [[ ${#locales[@]} -eq 0 ]]; then
-        locales=(
-            "en_US.UTF-8" "English (US)"
-            "en_GB.UTF-8" "English (UK)"
-            "de_DE.UTF-8" "German"
-            "fr_FR.UTF-8" "French"
-            "es_ES.UTF-8" "Spanish"
-            "it_IT.UTF-8" "Italian"
-            "pt_BR.UTF-8" "Portuguese (Brazil)"
-            "ru_RU.UTF-8" "Russian"
-            "ja_JP.UTF-8" "Japanese"
-            "zh_CN.UTF-8" "Chinese (Simplified)"
-        )
-    fi
-    
-    LOCALE=$(dialog --backtitle "Arch Linux Installer" \
-                    --title "Select Locale" \
-                    --menu "Select your locale:" 20 60 15 \
-                    "${locales[@]}" 3>&1 1>&2 2>&3)
-    local ret=$?
-    
-    if [[ $ret -ne 0 ]] || [[ -z "$LOCALE" ]]; then
-        LOCALE="en_US.UTF-8"
-        dialog --msgbox "No locale selected. Using 'en_US.UTF-8' as default." 7 50
+    # Capture the user's choice (0 = Yes, 1 = No)
+    local response=$?
+
+    # 3. If User says YES (0), generate list and show menu
+    if [[ $response -eq 0 ]]; then
+        
+        # Get list of available locales
+        local locales=()
+        if [[ -f /etc/locale.gen ]]; then
+            while IFS= read -r line; do
+                if [[ "$line" =~ ^#?([a-z]{2}_[A-Z]{2}\.UTF-8) ]]; then
+                    local locale="${BASH_REMATCH[1]}"
+                    
+                    local display_name=$(echo "$locale" | sed 's/_/ /g' | sed 's/\.UTF-8//')
+                    locales+=("$locale" "$display_name")
+                fi
+            done < /etc/locale.gen
+        fi
+        
+        # Fallback common locales if file parsing failed or was empty
+        if [[ ${#locales[@]} -eq 0 ]]; then
+            locales=(
+                "en_US.UTF-8" "English (US)"
+                "en_GB.UTF-8" "English (UK)"
+                "de_DE.UTF-8" "German"
+                "fr_FR.UTF-8" "French"
+                "es_ES.UTF-8" "Spanish"
+                "it_IT.UTF-8" "Italian"
+                "pt_BR.UTF-8" "Portuguese (Brazil)"
+                "ru_RU.UTF-8" "Russian"
+                "ja_JP.UTF-8" "Japanese"
+                "zh_CN.UTF-8" "Chinese (Simplified)"
+            )
+        fi
+        
+        local SELECTED_LOCALE
+        SELECTED_LOCALE=$(dialog --backtitle "Arch Linux Installer" \
+                                --title "Select Locale" \
+                                --menu "Select your locale:" 20 60 15 \
+                                "${locales[@]}" 3>&1 1>&2 2>&3)
+        
+        local ret=$?
+
+        # Update LOCALE only if they made a valid selection
+        if [[ $ret -eq 0 ]] && [[ -n "$SELECTED_LOCALE" ]]; then
+            LOCALE="$SELECTED_LOCALE"
+        else
+            # If they entered the menu but hit Cancel/Esc, notify them we represent to default
+            dialog --msgbox "Selection cancelled. Reverting to default: 'en_US.UTF-8'." 7 50
+        fi
     fi
 }
+
 
 # Get country mirrors
 get_country_mirrors() {
