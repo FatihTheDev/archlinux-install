@@ -517,11 +517,16 @@ get_locale() {
     LOCALE="en_US.UTF-8"
 
     # 2. Ask the user if they want to change the default
-    # We use 'if' directly here. This prevents 'set -e' from killing the script
-    # when the user selects "No" (which returns exit code 1).
-    if dialog --backtitle "Telva Linux Installer" \
-              --title "Locale Selection" \
-              --yesno "The default locale is configured as 'en_US.UTF-8'.\n\nDo you wish to select a different one?" 10 60; then
+    # Modification Details:
+    # --yes-label "No":   Changes the left button (default/return 0) to display "No".
+    # --no-label "Yes":   Changes the right button (return 1) to display "Yes".
+    # ! dialog:           Inverts the logic. If user selects "Yes" (Right button), 
+    #                     dialog returns 1. '! 1' becomes 0 (True), entering the block.
+    if ! dialog --backtitle "Telva Linux Installer" \
+                --title "Locale Selection" \
+                --yes-label "No" \
+                --no-label "Yes" \
+                --yesno "The default locale is configured as 'en_US.UTF-8'.\n\nDo you wish to select a different one?" 10 60; then
         
         # Get list of available locales
         local locales=()
