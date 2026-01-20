@@ -403,48 +403,45 @@ get_keyboard_layouts() {
     # Get list of available keyboard layouts
     local layouts=()
     
-    # Try using localectl if available
+    # 1. Try using localectl
     if command -v localectl &> /dev/null; then
         while IFS= read -r line; do
+            # ... (Your regex logic here) ...
             if [[ "$line" =~ ^[[:space:]]*([a-z]{2}(_[A-Z]{2})?)[[:space:]]+.*$ ]]; then
                 local layout="${BASH_REMATCH[1]}"
                 local desc=$(echo "$line" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')
-                layouts+=("$layout" "$desc")
+                # FIX: Add "off" as the 3rd argument
+                layouts+=("$layout" "$desc" "off") 
             fi
         done < <(localectl list-keymaps 2>/dev/null | head -50)
     fi
     
-    # Fallback: try reading from X11 rules
+    # 2. Fallback: try reading from X11 rules
     if [[ ${#layouts[@]} -eq 0 ]] && [[ -f /usr/share/X11/xkb/rules/base.lst ]]; then
         while IFS= read -r line; do
             if [[ "$line" =~ ^[[:space:]]*([a-z]{2})[[:space:]]+.*$ ]]; then
                 local layout="${BASH_REMATCH[1]}"
                 local desc=$(echo "$line" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')
-                layouts+=("$layout" "$desc")
+                # FIX: Add "off" as the 3rd argument
+                layouts+=("$layout" "$desc" "off")
             fi
         done < <(grep "^[[:space:]]*[a-z]\{2\}[[:space:]]" /usr/share/X11/xkb/rules/base.lst | head -50)
     fi
     
-    # Fallback common layouts if nothing found
+    # 3. Fallback common layouts
     if [[ ${#layouts[@]} -eq 0 ]]; then
+        # FIX: Add "off" to every item here manually
         layouts=(
-            "us" "English (US)"
-            "uk" "English (UK)"
-            "de" "German"
-            "fr" "French"
-            "es" "Spanish"
-            "it" "Italian"
-            "pt" "Portuguese"
-            "ru" "Russian"
-            "jp" "Japanese"
-            "cn" "Chinese"
-            "tr" "Turkish"
-            "pl" "Polish"
-            "nl" "Dutch"
-            "sv" "Swedish"
-            "no" "Norwegian"
-            "da" "Danish"
-            "fi" "Finnish"
+            "us" "English (US)" "off"
+            "uk" "English (UK)" "off"
+            "de" "German" "off"
+            "fr" "French" "off"
+            "es" "Spanish" "off"
+            "it" "Italian" "off"
+            "pt" "Portuguese" "off"
+            "ru" "Russian" "off"
+            "jp" "Japanese" "off"
+            "cn" "Chinese" "off"
         )
     fi
     
@@ -452,6 +449,7 @@ get_keyboard_layouts() {
                           --title "Select Keyboard Layouts" \
                           --checklist "Select one or more keyboard layouts:\n(Use space to select, enter to confirm)" 20 60 15 \
                           "${layouts[@]}" 3>&1 1>&2 2>&3)
+    
     local ret=$?
     
     if [[ $ret -ne 0 ]]; then
@@ -459,9 +457,9 @@ get_keyboard_layouts() {
         exit 1
     fi
     
+    # Fix the quoting result to array conversion
     KEYBOARD_LAYOUTS=($result)
     
-    # Default to US if nothing selected
     if [[ ${#KEYBOARD_LAYOUTS[@]} -eq 0 ]]; then
         KEYBOARD_LAYOUTS=("us")
         dialog --msgbox "No keyboard layouts selected. Using 'us' as default." 7 50
