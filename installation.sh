@@ -924,15 +924,6 @@ configure_zram_swap() {
     zram-size = min(ram / 2, 4096)
     EOF
 
-    # 3. Disable zswap at runtime
-    arch-chroot "$MOUNT_POINT" sh -c 'echo 0 > /sys/module/zswap/parameters/enabled'
-
-    # 3. Disable zswap via GRUB (for permanent disable)
-    arch-chroot "$MOUNT_POINT" sh -c 'sed -i "s/GRUB_CMDLINE_LINUX_DEFAULT=\"/GRUB_CMDLINE_LINUX_DEFAULT=\"zswap.enabled=0 /" /etc/default/grub'
-
-    # 4. Regenerate GRUB config
-    arch-chroot "$MOUNT_POINT" sh -c 'grub-mkconfig -o /boot/grub/grub.cfg'
-
     systemctl daemon-reload
 }
 
