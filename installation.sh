@@ -889,7 +889,7 @@ install_base() {
     dialog --infobox "Installing base system and essential packages..." 5 60
     
     # Base packages
-    pacstrap "$MOUNT_POINT" base base-devel "${KERNEL_PACKAGES[@]}" linux-firmware \
+    pacstrap "$MOUNT_POINT" base base-devel wget "${KERNEL_PACKAGES[@]}" linux-firmware \
              btrfs-progs networkmanager dialog reflector nano sudo \
              grub efibootmgr dosfstools os-prober mtools
     
