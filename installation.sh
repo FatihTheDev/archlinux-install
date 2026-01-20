@@ -393,7 +393,7 @@ get_keyboard_layouts() {
         add_keymap_if_exists "uk" "English (UK)"
         add_keymap_if_exists "de" "German"
         add_keymap_if_exists "ru" "Russian"
-        add_keymap_if_exists "hr" "Croatian"
+        add_keymap_if_exists "croat" "Croatian"
         add_keymap_if_exists "dvorak" "Dvorak (US)"
     fi
 
@@ -485,11 +485,6 @@ get_locale() {
     LOCALE="en_US.UTF-8"
 
     # 2. Ask the user if they want to change the default
-    # Modification Details:
-    # --yes-label "No":   Changes the left button (default/return 0) to display "No".
-    # --no-label "Yes":   Changes the right button (return 1) to display "Yes".
-    # ! dialog:           Inverts the logic. If user selects "Yes" (Right button), 
-    #                     dialog returns 1. '! 1' becomes 0 (True), entering the block.
     if ! dialog --backtitle "Telva Linux Installer" \
                 --title "Locale Selection" \
                 --yes-label "No" \
