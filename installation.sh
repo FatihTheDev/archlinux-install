@@ -144,6 +144,8 @@ SELECTED_COUNTRIES=()
 TIMEZONE=""
 KEYBOARD_LAYOUTS=()
 LOCALE=""
+SELECTED_KERNELS=()
+KERNEL_PACKAGES=()
 INSTALL_DISK=""
 PARTITION_METHOD=""
 MOUNT_POINT="/mnt"
@@ -403,54 +405,57 @@ get_keyboard_layouts() {
     # Get list of available keyboard layouts
     local layouts=()
     
-    # Try using localectl if available
+    # 1) Try using localectl if available.
+    # Note: `localectl list-keymaps` typically returns a single column (keymap names).
     if command -v localectl &> /dev/null; then
         while IFS= read -r line; do
-            if [[ "$line" =~ ^[[:space:]]*([a-z]{2}(_[A-Z]{2})?)[[:space:]]+.*$ ]]; then
-                local layout="${BASH_REMATCH[1]}"
-                local desc=$(echo "$line" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')
-                layouts+=("$layout" "$desc")
-            fi
+            # trim
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            [[ -z "$line" ]] && continue
+            [[ "$line" =~ ^# ]] && continue
+            local layout="$line"
+            layouts+=("$layout" "Console keymap: $layout" "off")
         done < <(localectl list-keymaps 2>/dev/null | head -50)
     fi
     
-    # Fallback: try reading from X11 rules
+    # 2) Fallback: try reading from X11 rules (layout names, not necessarily console keymaps)
     if [[ ${#layouts[@]} -eq 0 ]] && [[ -f /usr/share/X11/xkb/rules/base.lst ]]; then
         while IFS= read -r line; do
             if [[ "$line" =~ ^[[:space:]]*([a-z]{2})[[:space:]]+.*$ ]]; then
                 local layout="${BASH_REMATCH[1]}"
                 local desc=$(echo "$line" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')
-                layouts+=("$layout" "$desc")
+                layouts+=("$layout" "$desc" "off")
             fi
         done < <(grep "^[[:space:]]*[a-z]\{2\}[[:space:]]" /usr/share/X11/xkb/rules/base.lst | head -50)
     fi
     
-    # Fallback common layouts if nothing found
+    # 3) Fallback common layouts if nothing found
     if [[ ${#layouts[@]} -eq 0 ]]; then
         layouts=(
-            "us" "English (US)"
-            "uk" "English (UK)"
-            "de" "German"
-            "fr" "French"
-            "es" "Spanish"
-            "it" "Italian"
-            "pt" "Portuguese"
-            "ru" "Russian"
-            "jp" "Japanese"
-            "cn" "Chinese"
-            "tr" "Turkish"
-            "pl" "Polish"
-            "nl" "Dutch"
-            "sv" "Swedish"
-            "no" "Norwegian"
-            "da" "Danish"
-            "fi" "Finnish"
+            "us" "English (US)" "off"
+            "uk" "English (UK)" "off"
+            "de" "German" "off"
+            "fr" "French" "off"
+            "es" "Spanish" "off"
+            "it" "Italian" "off"
+            "pt" "Portuguese" "off"
+            "ru" "Russian" "off"
+            "jp" "Japanese" "off"
+            "cn" "Chinese" "off"
+            "tr" "Turkish" "off"
+            "pl" "Polish" "off"
+            "nl" "Dutch" "off"
+            "sv" "Swedish" "off"
+            "no" "Norwegian" "off"
+            "da" "Danish" "off"
+            "fi" "Finnish" "off"
         )
     fi
     
     local result=$(dialog --backtitle "Telva Linux Installer" \
                           --title "Select Keyboard Layouts" \
-                          --checklist "Select one or more keyboard layouts:\n(Use space to select, enter to confirm)" 20 60 15 \
+                          --checklist "Select one or more console/shell keyboard layouts (TTY/vconsole).\n\nNote: This does NOT configure your future GUI keyboard layout.\n(Use space to select, enter to confirm)" 21 70 15 \
                           "${layouts[@]}" 3>&1 1>&2 2>&3)
     local ret=$?
     
@@ -466,6 +471,58 @@ get_keyboard_layouts() {
         KEYBOARD_LAYOUTS=("us")
         dialog --msgbox "No keyboard layouts selected. Using 'us' as default." 7 50
     fi
+}
+
+# Get kernels to install
+get_kernels() {
+    # NOTE: `dialog` doesn't support real hover tooltips.
+    # The closest dynamic UX is `--item-help` + a Help/About button, which shows a one-liner per item.
+    local kernel_items=(
+        "linux" "linux (standard)" "on" "Default Arch kernel: best compatibility, well-tested."
+        "linux-lts" "linux-lts (LTS)" "off" "Long-term support kernel: older/stable series, fewer surprises."
+        "linux-zen" "linux-zen (performance)" "off" "Zen kernel: tuned for responsiveness/performance (desktop focus)."
+        "linux-hardened" "linux-hardened (security)" "off" "Hardened kernel: stronger security defaults, stricter behavior."
+    )
+
+    local result
+    result=$(dialog --backtitle "Telva Linux Installer" \
+                    --title "Select Kernels" \
+                    --help-button --help-label "About" \
+                    --item-help \
+                    --checklist "Choose which kernels to install:\n\nTip: highlight an item and press 'About' for a short description." 20 72 10 \
+                    "${kernel_items[@]}" 3>&1 1>&2 2>&3)
+    local ret=$?
+
+    if [[ $ret -ne 0 ]]; then
+        dialog --msgbox "Installation cancelled." 7 50
+        exit 1
+    fi
+
+    SELECTED_KERNELS=($result)
+    if [[ ${#SELECTED_KERNELS[@]} -eq 0 ]]; then
+        SELECTED_KERNELS=("linux")
+        dialog --msgbox "No kernels selected. Using 'linux' as default." 7 50
+    fi
+
+    # Build pacstrap kernel package list (kernel + matching headers)
+    KERNEL_PACKAGES=()
+    local k
+    for k in "${SELECTED_KERNELS[@]}"; do
+        case "$k" in
+            linux)
+                KERNEL_PACKAGES+=("linux" "linux-headers")
+                ;;
+            linux-lts)
+                KERNEL_PACKAGES+=("linux-lts" "linux-lts-headers")
+                ;;
+            linux-zen)
+                KERNEL_PACKAGES+=("linux-zen" "linux-zen-headers")
+                ;;
+            linux-hardened)
+                KERNEL_PACKAGES+=("linux-hardened" "linux-hardened-headers")
+                ;;
+        esac
+    done
 }
 
 # Get locale
@@ -878,7 +935,7 @@ install_base() {
     dialog --infobox "Installing base system and essential packages..." 5 60
     
     # Base packages
-    pacstrap "$MOUNT_POINT" base base-devel linux linux-headers linux-firmware \
+    pacstrap "$MOUNT_POINT" base base-devel "${KERNEL_PACKAGES[@]}" linux-firmware \
              btrfs-progs networkmanager dialog reflector nano sudo \
              grub efibootmgr dosfstools os-prober mtools
     
@@ -945,20 +1002,8 @@ configure_system() {
     if [[ ${#KEYBOARD_LAYOUTS[@]} -gt 0 ]]; then
         local keymap_line="KEYMAP=${KEYBOARD_LAYOUTS[0]}"
         echo "$keymap_line" > "$MOUNT_POINT/etc/vconsole.conf"
-        
-        # Set additional layouts in X11 config (if X11 is installed later)
-        mkdir -p "$MOUNT_POINT/etc/X11/xorg.conf.d"
-        cat > "$MOUNT_POINT/etc/X11/xorg.conf.d/00-keyboard.conf" <<EOF
-Section "InputClass"
-    Identifier "system-keyboard"
-    MatchIsKeyboard "on"
-    Option "XkbLayout" "$(IFS=,; echo "${KEYBOARD_LAYOUTS[*]}")"
-    Option "XkbModel" "pc105"
-    Option "XkbOptions" "grp:alt_shift_toggle"
-EndSection
-EOF
-        
-        # Set systemd-localed if available (for systemd)
+
+        # Set systemd-localed if available (for console keymap)
         if [[ -f "$MOUNT_POINT/usr/bin/localectl" ]]; then
             arch-chroot "$MOUNT_POINT" localectl set-keymap "${KEYBOARD_LAYOUTS[0]}" 2>/dev/null || true
         fi
@@ -1033,6 +1078,7 @@ main() {
     get_user_password
     get_timezone
     get_keyboard_layouts
+    get_kernels
     get_locale
     get_country_mirrors
     update_mirrors
@@ -1053,9 +1099,11 @@ main() {
     esac
     
     # Confirm before proceeding
+    local kernels_display
+    kernels_display=$(IFS=' '; echo "${SELECTED_KERNELS[*]}")
     dialog --backtitle "Telva Linux Installer" \
            --title "Confirm Installation" \
-           --yesno "Ready to install Telva Linux!\n\nDisk: $INSTALL_DISK\nRoot Partition: $ROOT_PARTITION\nUsername: $USERNAME\n\nContinue with installation?" 12 60
+           --yesno "Ready to install Telva Linux!\n\nDisk: $INSTALL_DISK\nRoot Partition: $ROOT_PARTITION\nKernels: $kernels_display\nUsername: $USERNAME\n\nContinue with installation?" 13 70
     
     if [[ $? -ne 0 ]]; then
         dialog --msgbox "Installation cancelled." 7 50
