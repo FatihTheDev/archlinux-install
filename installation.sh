@@ -34,13 +34,13 @@ check_tty() {
         echo "  wget -qO- URL > install.sh && sudo bash install.sh" >&2
         exit 1
     fi
-    
+
     # Detect TTY environment and set appropriate TERM
     local tty_device=""
     if [[ -t 0 ]]; then
         tty_device=$(tty 2>/dev/null || echo "")
     fi
-    
+
     # If TERM is not set or invalid, detect and set appropriate value
     if [[ -z "${TERM:-}" ]] || (command -v tput &> /dev/null && ! tput longname &> /dev/null 2>&1); then
         # Detect terminal type based on device
@@ -67,10 +67,10 @@ check_tty() {
             fi
         fi
     fi
-    
+
     # Ensure TERM is set (fallback to linux for TTY compatibility)
     export TERM="${TERM:-linux}"
-    
+
     # Verify TERM is valid by testing tput (if available)
     if command -v tput &> /dev/null; then
         if ! tput longname &> /dev/null 2>&1; then
@@ -83,12 +83,12 @@ check_tty() {
             done
         fi
     fi
-    
+
     # Test if dialog can actually work
     if ! command -v dialog &> /dev/null; then
         return 0  # Will be caught by check_dependencies
     fi
-    
+
     # Test dialog with current TERM
     if ! dialog --version &> /dev/null; then
         # Try with a more basic TERM if current one fails
@@ -115,7 +115,7 @@ setup_dialog_colors() {
     # Dialog automatically adapts to terminal capabilities
     # We just need to ensure TERM is set correctly (done in check_tty)
     # Dialog will work fine in TTY without any special options
-    
+
     # Set dialog label defaults for consistent TTY experience
     export DIALOG_OK_LABEL="OK"
     export DIALOG_CANCEL_LABEL="Cancel"
@@ -123,7 +123,7 @@ setup_dialog_colors() {
     export DIALOG_HELP_LABEL="Help"
     export DIALOG_YES_LABEL="Yes"
     export DIALOG_NO_LABEL="No"
-    
+
     # Ensure dialog can access the terminal properly
     # This is especially important for TTY environments
     if command -v dialog &> /dev/null; then
@@ -172,12 +172,12 @@ install_dialog_if_missing() {
         if command -v pacman &> /dev/null; then
             pacman -Sy --noconfirm dialog || {
                 echo "ERROR: Failed to install dialog. Please install it manually: pacman -Sy dialog" >&2
-                exit 1
-            }
-        else
-            echo "ERROR: pacman not found. Cannot install dialog automatically." >&2
-            echo "Please install dialog manually before running this script." >&2
-            exit 1
+                            exit 1
+                        }
+                else
+                    echo "ERROR: pacman not found. Cannot install dialog automatically." >&2
+                    echo "Please install dialog manually before running this script." >&2
+                    exit 1
         fi
     fi
 }
@@ -185,14 +185,14 @@ install_dialog_if_missing() {
 # Check for required tools
 check_dependencies() {
     local missing=()
-    
+
     # Dialog is now auto-installed, so we don't check for it here
     for cmd in reflector cfdisk mkfs.btrfs mount umount pacstrap genfstab arch-chroot parted lsblk; do
         if ! command -v "$cmd" &> /dev/null; then
             missing+=("$cmd")
         fi
     done
-    
+
     if [[ ${#missing[@]} -gt 0 ]]; then
         if command -v dialog &> /dev/null && [[ -t 1 ]] && [[ -t 2 ]]; then
             dialog --msgbox "Missing required tools: ${missing[*]}\n\nPlease install:\n- reflector\n- arch-install-scripts\n- btrfs-progs\n- parted\n- util-linux" 12 60
@@ -207,46 +207,46 @@ check_dependencies() {
 # Welcome screen
 show_welcome() {
     dialog --backtitle "Telva Linux Installer" \
-           --title "Welcome" \
-           --msgbox "Welcome to the Telva Linux Installation Script!\n\nThis installer will guide you through the installation process.\n\nPress OK to continue." 10 60
-}
+        --title "Welcome" \
+        --msgbox "Welcome to the Telva Linux Installation Script!\n\nThis installer will guide you through the installation process.\n\nPress OK to continue." 10 60
+    }
 
 # Get root password
 get_root_password() {
     while true; do
         ROOT_PASSWORD=$(dialog --backtitle "Telva Linux Installer" \
-                                --title "Root Password" \
-                                --insecure \
-                                --passwordbox "Enter root password (leave blank to lock root account):" 10 60 3>&1 1>&2 2>&3)
+            --title "Root Password" \
+            --insecure \
+            --passwordbox "Enter root password (leave blank to lock root account):" 10 60 3>&1 1>&2 2>&3)
         local ret=$?
-        
+
         if [[ $ret -ne 0 ]]; then
             dialog --msgbox "Installation cancelled." 7 50
             exit 1
         fi
-        
+
         if [[ -z "$ROOT_PASSWORD" ]]; then
             # IMPORTANT: under `set -e`, a "No" (exit code 1) from dialog would exit the script
             # unless we capture it via an `if dialog ...; then ... else ... fi` block.
             if dialog --backtitle "Telva Linux Installer" \
-                      --title "Lock Root Account" \
-                      --yesno "NOTE: You left the root password blank.\n\nDo you want to lock the root account?\n(Recommended for security)\n\nSelect 'No' to go back and set a root password." 12 70; then
-                LOCK_ROOT=true
-                break
-            else
-                continue
+                --title "Lock Root Account" \
+                --yesno "NOTE: You left the root password blank.\n\nDo you want to lock the root account?\n(Recommended for security)\n\nSelect 'No' to go back and set a root password." 12 70; then
+            LOCK_ROOT=true
+            break
+        else
+            continue
             fi
         else
             ROOT_PASSWORD_CONFIRM=$(dialog --backtitle "Telva Linux Installer" \
-                                           --title "Confirm Root Password" \
-                                           --insecure \
-                                           --passwordbox "Re-enter root password:" 10 60 3>&1 1>&2 2>&3)
+                --title "Confirm Root Password" \
+                --insecure \
+                --passwordbox "Re-enter root password:" 10 60 3>&1 1>&2 2>&3)
             local ret=$?
-            
+
             if [[ $ret -ne 0 ]]; then
                 continue
             fi
-            
+
             if [[ "$ROOT_PASSWORD" == "$ROOT_PASSWORD_CONFIRM" ]]; then
                 break
             else
@@ -260,26 +260,26 @@ get_root_password() {
 get_username() {
     while true; do
         USERNAME=$(dialog --backtitle "Telva Linux Installer" \
-                          --title "Username" \
-                          --inputbox "Enter username for the new user:" 10 60 3>&1 1>&2 2>&3)
+            --title "Username" \
+            --inputbox "Enter username for the new user:" 10 60 3>&1 1>&2 2>&3)
         local ret=$?
-        
+
         if [[ $ret -ne 0 ]]; then
             dialog --msgbox "Installation cancelled." 7 50
             exit 1
         fi
-        
+
         if [[ -z "$USERNAME" ]]; then
             dialog --msgbox "Username cannot be empty!" 7 50
             continue
         fi
-        
+
         # Validate username (lowercase letters, numbers, underscore, hyphen)
         if [[ ! "$USERNAME" =~ ^[a-z][a-z0-9_-]*$ ]]; then
             dialog --msgbox "Invalid username!\n\nUsername must:\n- Start with a lowercase letter\n- Contain only lowercase letters, numbers, underscore, or hyphen" 10 60
             continue
         fi
-        
+
         break
     done
 }
@@ -288,31 +288,31 @@ get_username() {
 get_user_password() {
     while true; do
         USER_PASSWORD=$(dialog --backtitle "Telva Linux Installer" \
-                                --title "User Password" \
-                                --insecure \
-                                --passwordbox "Enter password for user '$USERNAME':" 10 60 3>&1 1>&2 2>&3)
+            --title "User Password" \
+            --insecure \
+            --passwordbox "Enter password for user '$USERNAME':" 10 60 3>&1 1>&2 2>&3)
         local ret=$?
-        
+
         if [[ $ret -ne 0 ]]; then
             dialog --msgbox "Installation cancelled." 7 50
             exit 1
         fi
-        
+
         if [[ -z "$USER_PASSWORD" ]]; then
             dialog --msgbox "Password cannot be empty!" 7 50
             continue
         fi
-        
+
         USER_PASSWORD_CONFIRM=$(dialog --backtitle "Telva Linux Installer" \
-                                       --title "Confirm User Password" \
-                                       --insecure \
-                                       --passwordbox "Re-enter password for user '$USERNAME':" 10 60 3>&1 1>&2 2>&3)
+            --title "Confirm User Password" \
+            --insecure \
+            --passwordbox "Re-enter password for user '$USERNAME':" 10 60 3>&1 1>&2 2>&3)
         local ret=$?
-        
+
         if [[ $ret -ne 0 ]]; then
             continue
         fi
-        
+
         if [[ "$USER_PASSWORD" == "$USER_PASSWORD_CONFIRM" ]]; then
             break
         else
@@ -337,9 +337,9 @@ get_timezone() {
 
     # 2. Region Selection Dialog
     REGION=$(dialog --backtitle "Telva Linux Installer" \
-                    --title "Select Timezone Region" \
-                    --menu "Step 1: Choose your geographical region:" 20 60 15 \
-                    "${regions[@]}" 3>&1 1>&2 2>&3)
+        --title "Select Timezone Region" \
+        --menu "Step 1: Choose your geographical region:" 20 60 15 \
+        "${regions[@]}" 3>&1 1>&2 2>&3)
 
     if [[ $? -ne 0 ]] || [[ -z "$REGION" ]]; then
         TIMEZONE="UTC"
@@ -354,9 +354,9 @@ get_timezone() {
 
     # 4. City Selection Dialog
     CITY=$(dialog --backtitle "Telva Linux Installer" \
-                  --title "Select City - $REGION" \
-                  --menu "Step 2: Choose your city in $REGION:" 20 60 15 \
-                  "${cities[@]}" 3>&1 1>&2 2>&3)
+        --title "Select City - $REGION" \
+        --menu "Step 2: Choose your city in $REGION:" 20 60 15 \
+        "${cities[@]}" 3>&1 1>&2 2>&3)
 
     if [[ $? -ne 0 ]] || [[ -z "$CITY" ]]; then
         # If they cancel at the city level, we fall back to just the Region or UTC
@@ -408,20 +408,20 @@ get_keyboard_layouts() {
             "dvorak" "Dvorak (US)" "off"
         )
     fi
-    
+
     local result=$(dialog --backtitle "Telva Linux Installer" \
-                          --title "Select Keyboard Layouts" \
-                          --checklist "Select one or more console/shell keyboard layouts (TTY/vconsole).\n\nNote: This does NOT configure your future GUI keyboard layout.\n\nPress SPACE to select/deselect, ENTER to confirm." 22 72 12 \
-                          "${layouts[@]}" 3>&1 1>&2 2>&3)
+        --title "Select Keyboard Layouts" \
+        --checklist "Select one or more console/shell keyboard layouts (TTY/vconsole).\n\nNote: This does NOT configure your future GUI keyboard layout.\n\nPress SPACE to select/deselect, ENTER to confirm." 22 72 12 \
+        "${layouts[@]}" 3>&1 1>&2 2>&3)
     local ret=$?
-    
+
     if [[ $ret -ne 0 ]]; then
         dialog --msgbox "Installation cancelled." 7 50
         exit 1
     fi
-    
+
     KEYBOARD_LAYOUTS=($result)
-    
+
     # Default to US if nothing selected
     if [[ ${#KEYBOARD_LAYOUTS[@]} -eq 0 ]]; then
         KEYBOARD_LAYOUTS=("us")
@@ -442,9 +442,9 @@ get_kernels() {
 
     local result
     result=$(dialog --backtitle "Telva Linux Installer" \
-                    --title "Select Kernels" \
-                    --checklist "Choose which kernels to install:\n\nPress SPACE to select/deselect, ENTER to confirm." 20 72 10 \
-                    "${kernel_items[@]}" 3>&1 1>&2 2>&3)
+        --title "Select Kernels" \
+        --checklist "Choose which kernels to install:\n\nPress SPACE to select/deselect, ENTER to confirm." 20 72 10 \
+        "${kernel_items[@]}" 3>&1 1>&2 2>&3)
     local ret=$?
 
     if [[ $ret -ne 0 ]]; then
@@ -486,11 +486,11 @@ get_locale() {
 
     # 2. Ask the user if they want to change the default
     if ! dialog --backtitle "Telva Linux Installer" \
-                --title "Locale Selection" \
-                --yes-label "No" \
-                --no-label "Yes" \
-                --yesno "The default locale is configured as 'en_US.UTF-8'.\n\nDo you wish to select a different one?" 10 60; then
-        
+        --title "Locale Selection" \
+        --yes-label "No" \
+        --no-label "Yes" \
+        --yesno "The default locale is configured as 'en_US.UTF-8'.\n\nDo you wish to select a different one?" 10 60; then
+
         # Get list of available locales
         local locales=()
 
@@ -503,7 +503,7 @@ get_locale() {
                 fi
             done < /etc/locale.gen
         fi
-        
+
         # Fallback common locales
         if [[ ${#locales[@]} -eq 0 ]]; then
             locales=(
@@ -519,14 +519,14 @@ get_locale() {
                 "zh_CN.UTF-8" "Chinese (Simplified)"
             )
         fi
-        
+
         # Show the selection menu
         local SELECTED_LOCALE
         SELECTED_LOCALE=$(dialog --backtitle "Telva Linux Installer" \
-                                --title "Select Locale" \
-                                --menu "Select your locale:" 20 60 15 \
-                                "${locales[@]}" 3>&1 1>&2 2>&3)
-        
+            --title "Select Locale" \
+            --menu "Select your locale:" 20 60 15 \
+            "${locales[@]}" 3>&1 1>&2 2>&3)
+
         local ret=$?
 
         # Update LOCALE only if they made a valid selection
@@ -545,56 +545,56 @@ get_locale() {
 get_country_mirrors() {
     # List of countries for mirrors
     local countries=(
-    "Australia" "AU"
-    "Austria" "AT"
-    "Belgium" "BE"
-    "Brazil" "BR"
-    "Canada" "CA"
-    "China" "CN"
-    "Czech Republic" "CZ"
-    "Denmark" "DK"
-    "Finland" "FI"
-    "France" "FR"
-    "Germany" "DE"
-    "Greece" "GR"
-    "India" "IN"
-    "Ireland" "IE"
-    "Italy" "IT"
-    "Japan" "JP"
-    "Netherlands" "NL"
-    "Norway" "NO"
-    "Poland" "PL"
-    "Portugal" "PT"
-    "Russia" "RU"
-    "Singapore" "SG"
-    "South Korea" "KR"
-    "Spain" "ES"
-    "Sweden" "SE"
-    "Switzerland" "CH"
-    "Taiwan" "TW"
-    "United Kingdom" "GB"
-    "United States" "US"
-)
-    
+        "Australia" "AU"
+        "Austria" "AT"
+        "Belgium" "BE"
+        "Brazil" "BR"
+        "Canada" "CA"
+        "China" "CN"
+        "Czech Republic" "CZ"
+        "Denmark" "DK"
+        "Finland" "FI"
+        "France" "FR"
+        "Germany" "DE"
+        "Greece" "GR"
+        "India" "IN"
+        "Ireland" "IE"
+        "Italy" "IT"
+        "Japan" "JP"
+        "Netherlands" "NL"
+        "Norway" "NO"
+        "Poland" "PL"
+        "Portugal" "PT"
+        "Russia" "RU"
+        "Singapore" "SG"
+        "South Korea" "KR"
+        "Spain" "ES"
+        "Sweden" "SE"
+        "Switzerland" "CH"
+        "Taiwan" "TW"
+        "United Kingdom" "GB"
+        "United States" "US"
+    )
+
     # Create checklist
     local checklist_items=()
     for ((i=0; i<${#countries[@]}; i+=2)); do
         checklist_items+=("${countries[i]}" "${countries[i+1]}" "off")
     done
-    
+
     local result=$(dialog --backtitle "Telva Linux Installer" \
-                          --title "Select Mirror Countries" \
-                          --checklist "Select one or more countries for mirror selection:\n\nPress SPACE to select/deselect, ENTER to confirm." 20 60 15 \
-                          "${checklist_items[@]}" 3>&1 1>&2 2>&3)
+        --title "Select Mirror Countries" \
+        --checklist "Select one or more countries for mirror selection:\n\nPress SPACE to select/deselect, ENTER to confirm." 20 60 15 \
+        "${checklist_items[@]}" 3>&1 1>&2 2>&3)
     local ret=$?
-    
+
     if [[ $ret -ne 0 ]]; then
         dialog --msgbox "Installation cancelled." 7 50
         exit 1
     fi
-    
+
     SELECTED_COUNTRIES=($result)
-    
+
     if [[ ${#SELECTED_COUNTRIES[@]} -eq 0 ]]; then
         dialog --msgbox "No countries selected! Using default mirrors." 7 50
         SELECTED_COUNTRIES=("US")
@@ -604,15 +604,15 @@ get_country_mirrors() {
 # Update mirrors with reflector
 update_mirrors() {
     dialog --infobox "Updating mirror list with reflector..." 5 50
-    
+
     local country_list=$(IFS=','; echo "${SELECTED_COUNTRIES[*]}")
-    
+
     reflector --country "$country_list" \
-              --protocol https \
-              --latest 20 \
-              --sort rate \
-              --save /etc/pacman.d/mirrorlist
-    
+        --protocol https \
+        --latest 20 \
+        --sort rate \
+        --save /etc/pacman.d/mirrorlist
+
     if [[ $? -eq 0 ]]; then
         dialog --msgbox "Mirror list updated successfully!" 7 50
     else
@@ -629,18 +629,18 @@ get_disks() {
         local model=$(echo "$line" | awk '{for(i=3;i<=NF;i++) printf "%s ", $i; print ""}' | sed 's/[[:space:]]*$//')
         disks+=("$disk" "$size - $model")
     done < <(lsblk -dno NAME,SIZE,MODEL | grep -E '^sd[a-z]|^nvme|^vd[a-z]')
-    
+
     if [[ ${#disks[@]} -eq 0 ]]; then
         dialog --msgbox "No suitable disks found!" 7 50
         exit 1
     fi
-    
+
     INSTALL_DISK=$(dialog --backtitle "Telva Linux Installer" \
-                          --title "Select Installation Disk" \
-                          --menu "Select the disk to install Telva Linux:" 15 60 8 \
-                          "${disks[@]}" 3>&1 1>&2 2>&3)
+        --title "Select Installation Disk" \
+        --menu "Select the disk to install Telva Linux:" 15 60 8 \
+        "${disks[@]}" 3>&1 1>&2 2>&3)
     local ret=$?
-    
+
     if [[ $ret -ne 0 ]] || [[ -z "$INSTALL_DISK" ]]; then
         dialog --msgbox "No disk selected! Installation cancelled." 7 50
         exit 1
@@ -650,13 +650,13 @@ get_disks() {
 # Get partition method
 get_partition_method() {
     PARTITION_METHOD=$(dialog --backtitle "Telva Linux Installer" \
-                              --title "Partitioning Method" \
-                              --menu "Select partitioning method for $INSTALL_DISK:" 12 60 4 \
-                              "1" "Use full disk (WARNING: All data will be erased!)" \
-                              "2" "Use remaining free space" \
-                              "3" "Manual partitioning (cfdisk)" 3>&1 1>&2 2>&3)
+        --title "Partitioning Method" \
+        --menu "Select partitioning method for $INSTALL_DISK:" 12 60 4 \
+        "1" "Use full disk (WARNING: All data will be erased!)" \
+        "2" "Use remaining free space" \
+        "3" "Manual partitioning (cfdisk)" 3>&1 1>&2 2>&3)
     local ret=$?
-    
+
     if [[ $ret -ne 0 ]] || [[ -z "$PARTITION_METHOD" ]]; then
         dialog --msgbox "No method selected! Installation cancelled." 7 50
         exit 1
@@ -671,17 +671,17 @@ is_uefi() {
 # Partition disk - full disk
 partition_full_disk() {
     local disk="/dev/$INSTALL_DISK"
-    
+
     dialog --backtitle "Telva Linux Installer" \
-           --title "WARNING" \
-           --yesno "WARNING: This will erase ALL data on $disk!\n\nAre you sure you want to continue?" 10 60
-    
+        --title "WARNING" \
+        --yesno "WARNING: This will erase ALL data on $disk!\n\nAre you sure you want to continue?" 10 60
+
     if [[ $? -ne 0 ]]; then
         exit 1
     fi
-    
+
     dialog --infobox "Partitioning $disk..." 5 50
-    
+
     # Create partition table
     if is_uefi; then
         parted -s "$disk" mklabel gpt
@@ -696,10 +696,10 @@ partition_full_disk() {
         parted -s "$disk" mkpart primary btrfs 1MiB 100%
         parted -s "$disk" set 1 boot on
     fi
-    
+
     # Wait for partitions to be created
     sleep 2
-    
+
     # Set partition variables
     if is_uefi; then
         if [[ "$INSTALL_DISK" =~ ^nvme ]]; then
@@ -721,28 +721,28 @@ partition_full_disk() {
 # Partition disk - free space
 partition_free_space() {
     local disk="/dev/$INSTALL_DISK"
-    
+
     dialog --infobox "Checking for free space on $disk..." 5 50
-    
+
     # Get free space information
     local free_info=$(parted -s "$disk" print free | grep "Free Space" | tail -1)
-    
+
     if [[ -z "$free_info" ]]; then
         dialog --msgbox "No free space found on $disk!\n\nPlease select a different disk or use full disk option." 10 60
         exit 1
     fi
-    
+
     # Extract start and end from free space (format: "Free Space  1024MiB  2048MiB")
     local start=$(echo "$free_info" | awk '{print $3}' | sed 's/MiB//')
     local end=$(echo "$free_info" | awk '{print $4}' | sed 's/MiB//')
-    
+
     if [[ -z "$start" ]] || [[ -z "$end" ]] || [[ "$start" == "$end" ]]; then
         dialog --msgbox "No sufficient free space found on $disk!\n\nPlease select a different disk or use full disk option." 10 60
         exit 1
     fi
-    
+
     dialog --infobox "Creating partition in free space..." 5 50
-    
+
     # Create partition in free space
     if is_uefi; then
         # Check if EFI partition exists
@@ -755,7 +755,7 @@ partition_free_space() {
                 local efi_part_num=$(parted -s "$disk" print | grep -v "^$" | tail -1 | awk '{print $1}')
                 parted -s "$disk" set "$efi_part_num" esp on
                 start=$efi_end
-                
+
                 # Set EFI partition path
                 if [[ "$INSTALL_DISK" =~ ^nvme ]]; then
                     EFI_PARTITION="${disk}p${efi_part_num}"
@@ -779,9 +779,9 @@ partition_free_space() {
         local root_part_num=$(parted -s "$disk" print | tail -1 | awk '{print $1}')
         parted -s "$disk" set "$root_part_num" boot on
     fi
-    
+
     sleep 2
-    
+
     # Set root partition variable
     local root_part_num=$(parted -s "$disk" print | grep -v "^$" | tail -1 | awk '{print $1}')
     if [[ "$INSTALL_DISK" =~ ^nvme ]]; then
@@ -794,45 +794,45 @@ partition_free_space() {
 # Partition disk - manual
 partition_manual() {
     local disk="/dev/$INSTALL_DISK"
-    
+
     if is_uefi; then
         dialog --msgbox "You will now be taken to cfdisk for manual partitioning.\n\nAfter partitioning:\n- Make sure you have a root partition (btrfs)\n- Make sure you have an EFI partition (fat32, ~512MB)\n- Mark EFI partition as ESP/boot\n\nPress OK to continue." 12 60
     else
         dialog --msgbox "You will now be taken to cfdisk for manual partitioning.\n\nAfter partitioning:\n- Make sure you have a root partition (btrfs)\n- Mark root partition as boot\n\nPress OK to continue." 12 60
     fi
-    
+
     cfdisk "$disk"
-    
+
     dialog --msgbox "Please enter the partition numbers:\n\n(Check with: lsblk /dev/$INSTALL_DISK)" 10 60
-    
+
     if is_uefi; then
         local efi_part=$(dialog --backtitle "Telva Linux Installer" \
-                                --title "EFI Partition" \
-                                --inputbox "Enter EFI partition number (e.g., 1):" 10 60 3>&1 1>&2 2>&3)
+            --title "EFI Partition" \
+            --inputbox "Enter EFI partition number (e.g., 1):" 10 60 3>&1 1>&2 2>&3)
         local ret=$?
-        
+
         if [[ $ret -ne 0 ]] || [[ -z "$efi_part" ]]; then
             dialog --msgbox "EFI partition number required!" 7 50
             exit 1
         fi
-        
+
         if [[ "$INSTALL_DISK" =~ ^nvme ]]; then
             EFI_PARTITION="${disk}p${efi_part}"
         else
             EFI_PARTITION="${disk}${efi_part}"
         fi
     fi
-    
+
     local root_part=$(dialog --backtitle "Telva Linux Installer" \
-                             --title "Root Partition" \
-                             --inputbox "Enter root partition number (e.g., 2):" 10 60 3>&1 1>&2 2>&3)
+        --title "Root Partition" \
+        --inputbox "Enter root partition number (e.g., 2):" 10 60 3>&1 1>&2 2>&3)
     local ret=$?
-    
+
     if [[ $ret -ne 0 ]] || [[ -z "$root_part" ]]; then
         dialog --msgbox "Root partition number required!" 7 50
         exit 1
     fi
-    
+
     if [[ "$INSTALL_DISK" =~ ^nvme ]]; then
         ROOT_PARTITION="${disk}p${root_part}"
     else
@@ -843,40 +843,40 @@ partition_manual() {
 # Format partitions
 format_partitions() {
     dialog --infobox "Formatting partitions..." 5 50
-    
+
     # Format EFI partition if UEFI
     if is_uefi && [[ -n "$EFI_PARTITION" ]]; then
         mkfs.fat -F32 "$EFI_PARTITION"
     fi
-    
+
     # Format root partition with btrfs
     mkfs.btrfs -f "$ROOT_PARTITION"
-    
+
     # Mount root partition
     mount "$ROOT_PARTITION" "$MOUNT_POINT"
-    
+
     # Create btrfs subvolumes
     btrfs subvolume create "$MOUNT_POINT/@"
     btrfs subvolume create "$MOUNT_POINT/@home"
     btrfs subvolume create "$MOUNT_POINT/@var"
     btrfs subvolume create "$MOUNT_POINT/@snapshots"
-    
+
     # Unmount to remount with subvolumes
     umount "$MOUNT_POINT"
-    
+
     # Mount with subvolumes
     mount -o subvol=@,compress=zstd,noatime "$ROOT_PARTITION" "$MOUNT_POINT"
-    
+
     # Create mount points
     mkdir -p "$MOUNT_POINT/home"
     mkdir -p "$MOUNT_POINT/var"
     mkdir -p "$MOUNT_POINT/.snapshots"
-    
+
     # Mount subvolumes
     mount -o subvol=@home,compress=zstd,noatime "$ROOT_PARTITION" "$MOUNT_POINT/home"
     mount -o subvol=@var,compress=zstd,noatime "$ROOT_PARTITION" "$MOUNT_POINT/var"
     mount -o subvol=@snapshots,compress=zstd,noatime "$ROOT_PARTITION" "$MOUNT_POINT/.snapshots"
-    
+
     # Mount EFI partition if UEFI
     if is_uefi && [[ -n "$EFI_PARTITION" ]]; then
         mkdir -p "$MOUNT_POINT/boot/efi"
@@ -887,12 +887,12 @@ format_partitions() {
 # Install base system
 install_base() {
     dialog --infobox "Installing base system and essential packages..." 5 60
-    
+
     # Base packages
     pacstrap "$MOUNT_POINT" base base-devel wget "${KERNEL_PACKAGES[@]}" linux-firmware \
-             btrfs-progs networkmanager dialog reflector nano sudo \
-             grub efibootmgr dosfstools os-prober mtools
-    
+        btrfs-progs networkmanager dialog reflector nano sudo \
+        grub efibootmgr dosfstools os-prober mtools
+
     if [[ $? -ne 0 ]]; then
         dialog --msgbox "Error installing base system!" 7 50
         exit 1
@@ -903,7 +903,7 @@ install_base() {
 generate_fstab() {
     dialog --infobox "Generating fstab..." 5 50
     genfstab -U "$MOUNT_POINT" >> "$MOUNT_POINT/etc/fstab"
-    
+
     # Update fstab with subvolume options
     sed -i 's|subvol=@|subvol=@,compress=zstd,noatime|g' "$MOUNT_POINT/etc/fstab"
     sed -i 's|subvol=@home|subvol=@home,compress=zstd,noatime|g' "$MOUNT_POINT/etc/fstab"
@@ -914,24 +914,32 @@ generate_fstab() {
 # Configure zram swap
 configure_zram_swap() {
     dialog --infobox "Installing and configuring zram-generator..." 5 50
-    
+
     # 1. Install the generator package
     arch-chroot "$MOUNT_POINT" pacman -S --noconfirm zram-generator
 
     # 2. Create the configuration file
-    # This sets zram to 50% of total RAM and uses lz4 compression
     cat > "$MOUNT_POINT/etc/systemd/zram-generator.conf" <<'EOF'
-[zram0]
-zram-size = min(ram / 2, 4096)
-EOF
+    [zram0]
+    zram-size = min(ram / 2, 4096)
+    EOF
 
-systemctl daemon-reload
+    # 3. Disable zswap at runtime
+    arch-chroot "$MOUNT_POINT" sh -c 'echo 0 > /sys/module/zswap/parameters/enabled'
+
+    # 3. Disable zswap via GRUB (for permanent disable)
+    arch-chroot "$MOUNT_POINT" sh -c 'sed -i "s/GRUB_CMDLINE_LINUX_DEFAULT=\"/GRUB_CMDLINE_LINUX_DEFAULT=\"zswap.enabled=0 /" /etc/default/grub'
+
+    # 4. Regenerate GRUB config
+    arch-chroot "$MOUNT_POINT" sh -c 'grub-mkconfig -o /boot/grub/grub.cfg'
+
+    systemctl daemon-reload
 }
 
 # Configure system
 configure_system() {
     dialog --infobox "Configuring system..." 5 50
-    
+
     # Set timezone
     if [[ -n "$TIMEZONE" ]] && [[ -f "/usr/share/zoneinfo/$TIMEZONE" ]]; then
         arch-chroot "$MOUNT_POINT" ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
@@ -939,7 +947,7 @@ configure_system() {
         arch-chroot "$MOUNT_POINT" ln -sf /usr/share/zoneinfo/UTC /etc/localtime
     fi
     arch-chroot "$MOUNT_POINT" hwclock --systohc
-    
+
     # Configure keyboard layouts
     if [[ ${#KEYBOARD_LAYOUTS[@]} -gt 0 ]]; then
         local keymap_line="KEYMAP=${KEYBOARD_LAYOUTS[0]}"
@@ -950,13 +958,13 @@ configure_system() {
             arch-chroot "$MOUNT_POINT" localectl set-keymap "${KEYBOARD_LAYOUTS[0]}" 2>/dev/null || true
         fi
     fi
-    
+
     # Generate locale
     if [[ -n "$LOCALE" ]]; then
         # Uncomment locale in locale.gen
         sed -i "s|^#\($LOCALE\)|\1|" "$MOUNT_POINT/etc/locale.gen"
         arch-chroot "$MOUNT_POINT" locale-gen
-        
+
         # Set default locale
         echo "LANG=$LOCALE" > "$MOUNT_POINT/etc/locale.conf"
         echo "LC_ALL=$LOCALE" >> "$MOUNT_POINT/etc/locale.conf"
@@ -966,45 +974,45 @@ configure_system() {
         arch-chroot "$MOUNT_POINT" locale-gen
         echo "LANG=en_US.UTF-8" > "$MOUNT_POINT/etc/locale.conf"
     fi
-    
+
     # Set hostname
     echo "archlinux" > "$MOUNT_POINT/etc/hostname"
-    
+
     # Configure hosts file
     cat > "$MOUNT_POINT/etc/hosts" <<EOF
-127.0.0.1	localhost
-::1		localhost
-127.0.1.1	archlinux.localdomain	archlinux
+    127.0.0.1	localhost
+    ::1		localhost
+    127.0.1.1	archlinux.localdomain	archlinux
 EOF
-    
-    # Configure root password or lock account
-    if [[ "$LOCK_ROOT" == true ]]; then
-        arch-chroot "$MOUNT_POINT" passwd -l root 2>/dev/null || true
-    else
-        echo "root:$ROOT_PASSWORD" | arch-chroot "$MOUNT_POINT" chpasswd
-    fi
-    
-    # Create user
-    arch-chroot "$MOUNT_POINT" useradd -m -G wheel,audio,video,optical,storage "$USERNAME"
-    echo "$USERNAME:$USER_PASSWORD" | arch-chroot "$MOUNT_POINT" chpasswd
-    
-    # Configure sudo
-    sed -i 's/# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' "$MOUNT_POINT/etc/sudoers"
-    
-    # Enable NetworkManager
-    arch-chroot "$MOUNT_POINT" systemctl enable NetworkManager
-    
-    # Configure zram swap
-    configure_zram_swap
-    
-    # Install and configure GRUB
-    if is_uefi; then
-        arch-chroot "$MOUNT_POINT" grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
-    else
-        arch-chroot "$MOUNT_POINT" grub-install --target=i386-pc "/dev/$INSTALL_DISK"
-    fi
-    
-    arch-chroot "$MOUNT_POINT" grub-mkconfig -o /boot/grub/grub.cfg
+
+# Configure root password or lock account
+if [[ "$LOCK_ROOT" == true ]]; then
+    arch-chroot "$MOUNT_POINT" passwd -l root 2>/dev/null || true
+else
+    echo "root:$ROOT_PASSWORD" | arch-chroot "$MOUNT_POINT" chpasswd
+fi
+
+# Create user
+arch-chroot "$MOUNT_POINT" useradd -m -G wheel,audio,video,optical,storage "$USERNAME"
+echo "$USERNAME:$USER_PASSWORD" | arch-chroot "$MOUNT_POINT" chpasswd
+
+# Configure sudo
+sed -i 's/# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' "$MOUNT_POINT/etc/sudoers"
+
+# Enable NetworkManager
+arch-chroot "$MOUNT_POINT" systemctl enable NetworkManager
+
+# Configure zram swap
+configure_zram_swap
+
+# Install and configure GRUB
+if is_uefi; then
+    arch-chroot "$MOUNT_POINT" grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
+else
+    arch-chroot "$MOUNT_POINT" grub-install --target=i386-pc "/dev/$INSTALL_DISK"
+fi
+
+arch-chroot "$MOUNT_POINT" grub-mkconfig -o /boot/grub/grub.cfg
 }
 
 # Main installation function
@@ -1026,7 +1034,7 @@ main() {
     update_mirrors
     get_disks
     get_partition_method
-    
+
     # Partition based on method
     case "$PARTITION_METHOD" in
         "1")
@@ -1039,28 +1047,28 @@ main() {
             partition_manual
             ;;
     esac
-    
+
     # Confirm before proceeding
     local kernels_display
     kernels_display=$(IFS=' '; echo "${SELECTED_KERNELS[*]}")
     dialog --backtitle "Telva Linux Installer" \
-           --title "Confirm Installation" \
-           --yesno "Ready to install Telva Linux!\n\nDisk: $INSTALL_DISK\nRoot Partition: $ROOT_PARTITION\nKernels: $kernels_display\nUsername: $USERNAME\n\nContinue with installation?" 13 70
-    
+        --title "Confirm Installation" \
+        --yesno "Ready to install Telva Linux!\n\nDisk: $INSTALL_DISK\nRoot Partition: $ROOT_PARTITION\nKernels: $kernels_display\nUsername: $USERNAME\n\nContinue with installation?" 13 70
+
     if [[ $? -ne 0 ]]; then
         dialog --msgbox "Installation cancelled." 7 50
         exit 1
     fi
-    
+
     format_partitions
     install_base
     generate_fstab
     configure_system
-    
+
     dialog --backtitle "Telva Linux Installer" \
-           --title "Installation Complete" \
-           --msgbox "Installation completed successfully!\n\nYou can now reboot into your new Telva Linux system.\n\nRemember to:\n- Remove installation media\n- Reboot the system (reboot)" 12 60
-}
+        --title "Installation Complete" \
+        --msgbox "Installation completed successfully!\n\nYou can now reboot into your new Telva Linux system.\n\nRemember to:\n- Remove installation media\n- Reboot the system (reboot)" 12 60
+    }
 
 # Run main function
 main
