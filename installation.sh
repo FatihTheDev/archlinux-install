@@ -1028,8 +1028,6 @@ sed -i 's/# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' "$MOUNT_POINT/et
 # Enable NetworkManager
 arch-chroot "$MOUNT_POINT" systemctl enable NetworkManager
 
-# Configure zram swap
-configure_zram_swap
 
 # Install and configure GRUB
 if is_uefi; then
@@ -1039,6 +1037,9 @@ else
 fi
 
 arch-chroot "$MOUNT_POINT" grub-mkconfig -o /boot/grub/grub.cfg
+
+# Configure zram swap
+configure_zram_swap
 }
 
 # Main installation function
