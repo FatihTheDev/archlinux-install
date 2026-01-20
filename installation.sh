@@ -924,6 +924,8 @@ configure_zram_swap() {
 [zram0]
 zram-size = min(ram / 2, 4096)
 EOF
+
+systemctl daemon-reload
 }
 
 # Configure system
