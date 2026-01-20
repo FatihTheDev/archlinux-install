@@ -911,20 +911,37 @@ generate_fstab() {
     sed -i 's|subvol=@snapshots|subvol=@snapshots,compress=zstd,noatime|g' "$MOUNT_POINT/etc/fstab"
 }
 
-# Configure zram swap
+# Configure zram swap and disable zswap (GRUB specific)
 configure_zram_swap() {
-    dialog --infobox "Installing and configuring zram-generator..." 5 50
+    dialog --infobox "Installing zram-generator and disabling zswap in GRUB..." 5 50
 
     # 1. Install the generator package
     arch-chroot "$MOUNT_POINT" pacman -S --noconfirm zram-generator
 
-    # 2. Create the configuration file
+    # 2. Create the zram configuration file
     cat > "$MOUNT_POINT/etc/systemd/zram-generator.conf" <<'EOF'
-    [zram0]
-    zram-size = min(ram / 2, 4096)
-    EOF
+[zram0]
+zram-size = min(ram / 2, 4096)
+compression-algorithm = zstd
+EOF
 
-    systemctl daemon-reload
+    # 3. Disable zswap in /etc/default/grub
+    # This checks if the parameter exists; if not, it inserts it into the default line
+    if ! grep -q "zswap.enabled=0" "$MOUNT_POINT/etc/default/grub"; then
+        sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="/&zswap.enabled=0 /' "$MOUNT_POINT/etc/default/grub"
+    fi
+
+    # 4. Regenerate the GRUB configuration
+    # This applies the change to the actual /boot/grub/grub.cfg file
+    arch-chroot "$MOUNT_POINT" grub-mkconfig -o /boot/grub/grub.cfg
+
+    # 5. Safety fallback (tmpfiles.d)
+    # Ensures it's disabled even if the kernel command line is bypassed
+    cat > "$MOUNT_POINT/etc/tmpfiles.d/disable-zswap.conf" <<'EOF'
+w /sys/module/zswap/parameters/enabled - - - - 0
+EOF
+
+systemctl daemon-reload
 }
 
 # Configure system
