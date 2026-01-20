@@ -934,12 +934,6 @@ EOF
     # This applies the change to the actual /boot/grub/grub.cfg file
     arch-chroot "$MOUNT_POINT" grub-mkconfig -o /boot/grub/grub.cfg
 
-    # 5. Safety fallback (tmpfiles.d)
-    # Ensures it's disabled even if the kernel command line is bypassed
-    cat > "$MOUNT_POINT/etc/tmpfiles.d/disable-zswap.conf" <<'EOF'
-w /sys/module/zswap/parameters/enabled - - - - 0
-EOF
-
 systemctl daemon-reload
 }
 
