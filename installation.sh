@@ -323,83 +323,51 @@ get_user_password() {
 
 # Get timezone
 get_timezone() {
-    # Use timedatectl list-timezones if available (simpler)
-    if command -v timedatectl &> /dev/null; then
-        local timezones=()
-        while IFS= read -r tz; do
-            if [[ -n "$tz" ]]; then
-                local display_name=$(echo "$tz" | sed 's|_| |g' | sed 's|/| - |g')
-                timezones+=("$tz" "$display_name")
-            fi
-        done < <(timedatectl list-timezones | head -800)
-        
-        if [[ ${#timezones[@]} -gt 0 ]]; then
-            TIMEZONE=$(dialog --backtitle "Telva Linux Installer" \
-                              --title "Select Timezone" \
-                              --menu "Select your timezone:" 20 60 15 \
-                              "${timezones[@]}" 3>&1 1>&2 2>&3)
-            local ret=$?
-            
-            if [[ $ret -ne 0 ]] || [[ -z "$TIMEZONE" ]]; then
-                TIMEZONE="UTC"
-            fi
-            return 0
-        fi
-    fi
-    
-    # Fallback: Get list of timezones (regions) from /usr/share/zoneinfo
+    local REGION
+    local CITY
     local regions=()
-    if [[ -d /usr/share/zoneinfo ]]; then
-        while IFS= read -r region; do
-            if [[ -n "$region" ]] && [[ -d "/usr/share/zoneinfo/$region" ]] && [[ ! "$region" =~ ^(right|posix|SystemV|Etc)$ ]]; then
-                regions+=("$region" "$region")
-            fi
-        done < <(find /usr/share/zoneinfo -maxdepth 1 -type d ! -path /usr/share/zoneinfo | sort | sed 's|/usr/share/zoneinfo/||' | head -30)
-    fi
-    
-    if [[ ${#regions[@]} -eq 0 ]]; then
-        # Fallback if timezone info not available
-        TIMEZONE="UTC"
-        return 0
-    fi
-    
-    local selected_region=$(dialog --backtitle "Telva Linux Installer" \
-                                   --title "Select Timezone Region" \
-                                   --menu "Select your timezone region:" 20 60 12 \
-                                   "${regions[@]}" 3>&1 1>&2 2>&3)
-    local ret=$?
-    
-    if [[ $ret -ne 0 ]] || [[ -z "$selected_region" ]]; then
-        TIMEZONE="UTC"
-        return 0
-    fi
-    
-    # Get cities in selected region
     local cities=()
-    if [[ -d "/usr/share/zoneinfo/$selected_region" ]]; then
-        while IFS= read -r city; do
-            if [[ -n "$city" ]] && [[ -f "/usr/share/zoneinfo/$selected_region/$city" ]] && [[ ! "$city" =~ \.tab$ ]]; then
-                cities+=("$city" "$city")
-            fi
-        done < <(find "/usr/share/zoneinfo/$selected_region" -maxdepth 1 -type f | sort | sed "s|/usr/share/zoneinfo/$selected_region/||" | head -30)
-    fi
-    
-    if [[ ${#cities[@]} -eq 0 ]]; then
-        TIMEZONE="$selected_region"
+
+    # 1. Collect Regions from /usr/share/zoneinfo
+    # We filter out specific directories like 'posix', 'right', and 'Etc' which aren't standard regions
+    while IFS= read -r dir; do
+        local name=$(basename "$dir")
+        regions+=("$name" "Timezone Region")
+    done < <(find /usr/share/zoneinfo -maxdepth 1 -type d ! -path /usr/share/zoneinfo ! -name "posix" ! -name "right" ! -name "Etc" ! -name "SystemV" | sort)
+
+    # 2. Region Selection Dialog
+    REGION=$(dialog --backtitle "Telva Linux Installer" \
+                    --title "Select Timezone Region" \
+                    --menu "Step 1: Choose your geographical region:" 20 60 15 \
+                    "${regions[@]}" 3>&1 1>&2 2>&3)
+
+    if [[ $? -ne 0 ]] || [[ -z "$REGION" ]]; then
+        TIMEZONE="UTC"
         return 0
     fi
-    
-    local selected_city=$(dialog --backtitle "Telva Linux Installer" \
-                                 --title "Select City" \
-                                 --menu "Select your city in $selected_region:" 20 60 12 \
-                                 "${cities[@]}" 3>&1 1>&2 2>&3)
-    ret=$?
-    
-    if [[ $ret -ne 0 ]] || [[ -z "$selected_city" ]]; then
-        TIMEZONE="$selected_region"
+
+    # 3. Collect Cities/Subzones for the selected Region
+    while IFS= read -r file; do
+        local name=$(basename "$file")
+        cities+=("$name" "City / Location")
+    done < <(find "/usr/share/zoneinfo/$REGION" -maxdepth 1 -type f ! -name "*.tab" | sort)
+
+    # 4. City Selection Dialog
+    CITY=$(dialog --backtitle "Telva Linux Installer" \
+                  --title "Select City - $REGION" \
+                  --menu "Step 2: Choose your city in $REGION:" 20 60 15 \
+                  "${cities[@]}" 3>&1 1>&2 2>&3)
+
+    if [[ $? -ne 0 ]] || [[ -z "$CITY" ]]; then
+        # If they cancel at the city level, we fall back to just the Region or UTC
+        TIMEZONE="UTC"
     else
-        TIMEZONE="$selected_region/$selected_city"
+        TIMEZONE="$REGION/$CITY"
     fi
+
+    # Feedback for the user
+    dialog --infobox "Timezone set to: $TIMEZONE" 3 40
+    sleep 1
 }
 
 # Get keyboard layouts
