@@ -922,7 +922,6 @@ configure_zram_swap() {
     cat > "$MOUNT_POINT/etc/systemd/zram-generator.conf" <<'EOF'
 [zram0]
 zram-size = min(ram / 2, 4096)
-compression-algorithm = zstd
 EOF
 
     # 3. Disable zswap in /etc/default/grub
