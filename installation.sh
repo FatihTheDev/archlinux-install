@@ -226,13 +226,15 @@ get_root_password() {
         fi
         
         if [[ -z "$ROOT_PASSWORD" ]]; then
-            dialog --backtitle "Telva Linux Installer" \
-                   --title "Lock Root Account" \
-                   --yesno "You left the root password blank.\n\nDo you want to lock the root account?\n(Recommended for security)" 10 60
-            
-            if [[ $? -eq 0 ]]; then
+            # IMPORTANT: under `set -e`, a "No" (exit code 1) from dialog would exit the script
+            # unless we capture it via an `if dialog ...; then ... else ... fi` block.
+            if dialog --backtitle "Telva Linux Installer" \
+                      --title "Lock Root Account" \
+                      --yesno "WARNING: You left the root password blank.\n\nDo you want to lock the root account?\n(Recommended for security)\n\nSelect 'No' to go back and set a root password." 12 70; then
                 LOCK_ROOT=true
                 break
+            else
+                continue
             fi
         else
             ROOT_PASSWORD_CONFIRM=$(dialog --backtitle "Telva Linux Installer" \
@@ -402,60 +404,46 @@ get_timezone() {
 
 # Get keyboard layouts
 get_keyboard_layouts() {
-    # Get list of available keyboard layouts
+    # Keep this list intentionally small and beginner-friendly.
+    # This config applies to the console/shell (TTY/vconsole), not GUI.
     local layouts=()
-    
-    # 1) Try using localectl if available.
-    # Note: `localectl list-keymaps` typically returns a single column (keymap names).
+
     if command -v localectl &> /dev/null; then
-        while IFS= read -r line; do
-            # trim
-            line="${line#"${line%%[![:space:]]*}"}"
-            line="${line%"${line##*[![:space:]]}"}"
-            [[ -z "$line" ]] && continue
-            [[ "$line" =~ ^# ]] && continue
-            local layout="$line"
-            layouts+=("$layout" "Console keymap: $layout" "off")
-        done < <(localectl list-keymaps 2>/dev/null | head -50)
-    fi
-    
-    # 2) Fallback: try reading from X11 rules (layout names, not necessarily console keymaps)
-    if [[ ${#layouts[@]} -eq 0 ]] && [[ -f /usr/share/X11/xkb/rules/base.lst ]]; then
-        while IFS= read -r line; do
-            if [[ "$line" =~ ^[[:space:]]*([a-z]{2})[[:space:]]+.*$ ]]; then
-                local layout="${BASH_REMATCH[1]}"
-                local desc=$(echo "$line" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')
-                layouts+=("$layout" "$desc" "off")
+        local available_keymaps
+        available_keymaps="$(localectl list-keymaps 2>/dev/null || true)"
+
+        add_keymap_if_exists() {
+            local keymap="$1"
+            local label="$2"
+            if echo "$available_keymaps" | grep -Fxq "$keymap"; then
+                layouts+=("$keymap" "$label" "off")
             fi
-        done < <(grep "^[[:space:]]*[a-z]\{2\}[[:space:]]" /usr/share/X11/xkb/rules/base.lst | head -50)
+        }
+
+        # Basic/commonly requested console keymaps (only added if present)
+        add_keymap_if_exists "us" "English (US)"
+        add_keymap_if_exists "uk" "English (UK)"
+        add_keymap_if_exists "de" "German"
+        add_keymap_if_exists "ru" "Russian"
+        add_keymap_if_exists "hr" "Croatian"
+        add_keymap_if_exists "dvorak" "Dvorak (US)"
     fi
-    
-    # 3) Fallback common layouts if nothing found
+
+    # Fallback: minimal set (may vary by environment, but avoids an empty dialog)
     if [[ ${#layouts[@]} -eq 0 ]]; then
         layouts=(
             "us" "English (US)" "off"
             "uk" "English (UK)" "off"
             "de" "German" "off"
-            "fr" "French" "off"
-            "es" "Spanish" "off"
-            "it" "Italian" "off"
-            "pt" "Portuguese" "off"
             "ru" "Russian" "off"
-            "jp" "Japanese" "off"
-            "cn" "Chinese" "off"
-            "tr" "Turkish" "off"
-            "pl" "Polish" "off"
-            "nl" "Dutch" "off"
-            "sv" "Swedish" "off"
-            "no" "Norwegian" "off"
-            "da" "Danish" "off"
-            "fi" "Finnish" "off"
+            "hr" "Croatian" "off"
+            "dvorak" "Dvorak (US)" "off"
         )
     fi
     
     local result=$(dialog --backtitle "Telva Linux Installer" \
                           --title "Select Keyboard Layouts" \
-                          --checklist "Select one or more console/shell keyboard layouts (TTY/vconsole).\n\nNote: This does NOT configure your future GUI keyboard layout.\n(Use space to select, enter to confirm)" 21 70 15 \
+                          --checklist "Select one or more console/shell keyboard layouts (TTY/vconsole).\n\nNote: This does NOT configure your future GUI keyboard layout.\n\nPress SPACE to select/deselect, ENTER to confirm." 22 72 12 \
                           "${layouts[@]}" 3>&1 1>&2 2>&3)
     local ret=$?
     
@@ -475,21 +463,19 @@ get_keyboard_layouts() {
 
 # Get kernels to install
 get_kernels() {
-    # NOTE: `dialog` doesn't support real hover tooltips.
-    # The closest dynamic UX is `--item-help` + a Help/About button, which shows a one-liner per item.
+    # `dialog` doesn't support hover tooltips.
+    # Best alternative: show the one-liner directly in the checklist description column.
     local kernel_items=(
-        "linux" "linux (standard)" "on" "Default Arch kernel: best compatibility, well-tested."
-        "linux-lts" "linux-lts (LTS)" "off" "Long-term support kernel: older/stable series, fewer surprises."
-        "linux-zen" "linux-zen (performance)" "off" "Zen kernel: tuned for responsiveness/performance (desktop focus)."
-        "linux-hardened" "linux-hardened (security)" "off" "Hardened kernel: stronger security defaults, stricter behavior."
+        "linux" "Default: best compatibility, well-tested" "on"
+        "linux-lts" "LTS: older/stable series, fewer surprises" "off"
+        "linux-zen" "Zen: tuned for responsiveness/performance" "off"
+        "linux-hardened" "Hardened: stronger security defaults" "off"
     )
 
     local result
     result=$(dialog --backtitle "Telva Linux Installer" \
                     --title "Select Kernels" \
-                    --help-button --help-label "About" \
-                    --item-help \
-                    --checklist "Choose which kernels to install:\n\nTip: highlight an item and press 'About' for a short description." 20 72 10 \
+                    --checklist "Choose which kernels to install:\n\nPress SPACE to select/deselect, ENTER to confirm." 20 72 10 \
                     "${kernel_items[@]}" 3>&1 1>&2 2>&3)
     local ret=$?
 
@@ -630,7 +616,7 @@ get_country_mirrors() {
     
     local result=$(dialog --backtitle "Telva Linux Installer" \
                           --title "Select Mirror Countries" \
-                          --checklist "Select one or more countries for mirror selection:\n(Use space to select, enter to confirm)" 20 60 15 \
+                          --checklist "Select one or more countries for mirror selection:\n\nPress SPACE to select/deselect, ENTER to confirm." 20 60 15 \
                           "${checklist_items[@]}" 3>&1 1>&2 2>&3)
     local ret=$?
     
