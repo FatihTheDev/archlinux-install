@@ -144,6 +144,8 @@ SELECTED_COUNTRIES=()
 TIMEZONE=""
 KEYBOARD_LAYOUTS=()
 LOCALE=""
+SELECTED_KERNELS=()
+KERNEL_PACKAGES=()
 INSTALL_DISK=""
 PARTITION_METHOD=""
 MOUNT_POINT="/mnt"
@@ -224,13 +226,15 @@ get_root_password() {
         fi
         
         if [[ -z "$ROOT_PASSWORD" ]]; then
-            dialog --backtitle "Telva Linux Installer" \
-                   --title "Lock Root Account" \
-                   --yesno "You left the root password blank.\n\nDo you want to lock the root account?\n(Recommended for security)" 10 60
-            
-            if [[ $? -eq 0 ]]; then
+            # IMPORTANT: under `set -e`, a "No" (exit code 1) from dialog would exit the script
+            # unless we capture it via an `if dialog ...; then ... else ... fi` block.
+            if dialog --backtitle "Telva Linux Installer" \
+                      --title "Lock Root Account" \
+                      --yesno "WARNING: You left the root password blank.\n\nDo you want to lock the root account?\n(Recommended for security)\n\nSelect 'No' to go back and set a root password." 12 70; then
                 LOCK_ROOT=true
                 break
+            else
+                continue
             fi
         else
             ROOT_PASSWORD_CONFIRM=$(dialog --backtitle "Telva Linux Installer" \
@@ -319,138 +323,95 @@ get_user_password() {
 
 # Get timezone
 get_timezone() {
-    # Use timedatectl list-timezones if available (simpler)
-    if command -v timedatectl &> /dev/null; then
-        local timezones=()
-        while IFS= read -r tz; do
-            if [[ -n "$tz" ]]; then
-                local display_name=$(echo "$tz" | sed 's|_| |g' | sed 's|/| - |g')
-                timezones+=("$tz" "$display_name")
-            fi
-        done < <(timedatectl list-timezones | head -800)
-        
-        if [[ ${#timezones[@]} -gt 0 ]]; then
-            TIMEZONE=$(dialog --backtitle "Telva Linux Installer" \
-                              --title "Select Timezone" \
-                              --menu "Select your timezone:" 20 60 15 \
-                              "${timezones[@]}" 3>&1 1>&2 2>&3)
-            local ret=$?
-            
-            if [[ $ret -ne 0 ]] || [[ -z "$TIMEZONE" ]]; then
-                TIMEZONE="UTC"
-            fi
-            return 0
-        fi
-    fi
-    
-    # Fallback: Get list of timezones (regions) from /usr/share/zoneinfo
+    local REGION
+    local CITY
     local regions=()
-    if [[ -d /usr/share/zoneinfo ]]; then
-        while IFS= read -r region; do
-            if [[ -n "$region" ]] && [[ -d "/usr/share/zoneinfo/$region" ]] && [[ ! "$region" =~ ^(right|posix|SystemV|Etc)$ ]]; then
-                regions+=("$region" "$region")
-            fi
-        done < <(find /usr/share/zoneinfo -maxdepth 1 -type d ! -path /usr/share/zoneinfo | sort | sed 's|/usr/share/zoneinfo/||' | head -30)
-    fi
-    
-    if [[ ${#regions[@]} -eq 0 ]]; then
-        # Fallback if timezone info not available
-        TIMEZONE="UTC"
-        return 0
-    fi
-    
-    local selected_region=$(dialog --backtitle "Telva Linux Installer" \
-                                   --title "Select Timezone Region" \
-                                   --menu "Select your timezone region:" 20 60 12 \
-                                   "${regions[@]}" 3>&1 1>&2 2>&3)
-    local ret=$?
-    
-    if [[ $ret -ne 0 ]] || [[ -z "$selected_region" ]]; then
-        TIMEZONE="UTC"
-        return 0
-    fi
-    
-    # Get cities in selected region
     local cities=()
-    if [[ -d "/usr/share/zoneinfo/$selected_region" ]]; then
-        while IFS= read -r city; do
-            if [[ -n "$city" ]] && [[ -f "/usr/share/zoneinfo/$selected_region/$city" ]] && [[ ! "$city" =~ \.tab$ ]]; then
-                cities+=("$city" "$city")
-            fi
-        done < <(find "/usr/share/zoneinfo/$selected_region" -maxdepth 1 -type f | sort | sed "s|/usr/share/zoneinfo/$selected_region/||" | head -30)
-    fi
-    
-    if [[ ${#cities[@]} -eq 0 ]]; then
-        TIMEZONE="$selected_region"
+
+    # 1. Collect Regions from /usr/share/zoneinfo
+    # We filter out specific directories like 'posix', 'right', and 'Etc' which aren't standard regions
+    while IFS= read -r dir; do
+        local name=$(basename "$dir")
+        regions+=("$name" "Timezone Region")
+    done < <(find /usr/share/zoneinfo -maxdepth 1 -type d ! -path /usr/share/zoneinfo ! -name "posix" ! -name "right" ! -name "Etc" ! -name "SystemV" | sort)
+
+    # 2. Region Selection Dialog
+    REGION=$(dialog --backtitle "Telva Linux Installer" \
+                    --title "Select Timezone Region" \
+                    --menu "Step 1: Choose your geographical region:" 20 60 15 \
+                    "${regions[@]}" 3>&1 1>&2 2>&3)
+
+    if [[ $? -ne 0 ]] || [[ -z "$REGION" ]]; then
+        TIMEZONE="UTC"
         return 0
     fi
-    
-    local selected_city=$(dialog --backtitle "Telva Linux Installer" \
-                                 --title "Select City" \
-                                 --menu "Select your city in $selected_region:" 20 60 12 \
-                                 "${cities[@]}" 3>&1 1>&2 2>&3)
-    ret=$?
-    
-    if [[ $ret -ne 0 ]] || [[ -z "$selected_city" ]]; then
-        TIMEZONE="$selected_region"
+
+    # 3. Collect Cities/Subzones for the selected Region
+    while IFS= read -r file; do
+        local name=$(basename "$file")
+        cities+=("$name" "City / Location")
+    done < <(find "/usr/share/zoneinfo/$REGION" -maxdepth 1 -type f ! -name "*.tab" | sort)
+
+    # 4. City Selection Dialog
+    CITY=$(dialog --backtitle "Telva Linux Installer" \
+                  --title "Select City - $REGION" \
+                  --menu "Step 2: Choose your city in $REGION:" 20 60 15 \
+                  "${cities[@]}" 3>&1 1>&2 2>&3)
+
+    if [[ $? -ne 0 ]] || [[ -z "$CITY" ]]; then
+        # If they cancel at the city level, we fall back to just the Region or UTC
+        TIMEZONE="UTC"
     else
-        TIMEZONE="$selected_region/$selected_city"
+        TIMEZONE="$REGION/$CITY"
     fi
+
+    # Feedback for the user
+    dialog --infobox "Timezone set to: $TIMEZONE" 3 40
+    sleep 1
 }
 
 # Get keyboard layouts
 get_keyboard_layouts() {
-    # Get list of available keyboard layouts
+    # Keep this list intentionally small and beginner-friendly.
+    # This config applies to the console/shell (TTY/vconsole), not GUI.
     local layouts=()
-    
-    # Try using localectl if available
+
     if command -v localectl &> /dev/null; then
-        while IFS= read -r line; do
-            if [[ "$line" =~ ^[[:space:]]*([a-z]{2}(_[A-Z]{2})?)[[:space:]]+.*$ ]]; then
-                local layout="${BASH_REMATCH[1]}"
-                local desc=$(echo "$line" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')
-                layouts+=("$layout" "$desc")
+        local available_keymaps
+        available_keymaps="$(localectl list-keymaps 2>/dev/null || true)"
+
+        add_keymap_if_exists() {
+            local keymap="$1"
+            local label="$2"
+            if echo "$available_keymaps" | grep -Fxq "$keymap"; then
+                layouts+=("$keymap" "$label" "off")
             fi
-        done < <(localectl list-keymaps 2>/dev/null | head -50)
+        }
+
+        # Basic/commonly requested console keymaps (only added if present)
+        add_keymap_if_exists "us" "English (US)"
+        add_keymap_if_exists "uk" "English (UK)"
+        add_keymap_if_exists "de" "German"
+        add_keymap_if_exists "ru" "Russian"
+        add_keymap_if_exists "croat" "Croatian"
+        add_keymap_if_exists "dvorak" "Dvorak (US)"
     fi
-    
-    # Fallback: try reading from X11 rules
-    if [[ ${#layouts[@]} -eq 0 ]] && [[ -f /usr/share/X11/xkb/rules/base.lst ]]; then
-        while IFS= read -r line; do
-            if [[ "$line" =~ ^[[:space:]]*([a-z]{2})[[:space:]]+.*$ ]]; then
-                local layout="${BASH_REMATCH[1]}"
-                local desc=$(echo "$line" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')
-                layouts+=("$layout" "$desc")
-            fi
-        done < <(grep "^[[:space:]]*[a-z]\{2\}[[:space:]]" /usr/share/X11/xkb/rules/base.lst | head -50)
-    fi
-    
-    # Fallback common layouts if nothing found
+
+    # Fallback: minimal set (may vary by environment, but avoids an empty dialog)
     if [[ ${#layouts[@]} -eq 0 ]]; then
         layouts=(
-            "us" "English (US)"
-            "uk" "English (UK)"
-            "de" "German"
-            "fr" "French"
-            "es" "Spanish"
-            "it" "Italian"
-            "pt" "Portuguese"
-            "ru" "Russian"
-            "jp" "Japanese"
-            "cn" "Chinese"
-            "tr" "Turkish"
-            "pl" "Polish"
-            "nl" "Dutch"
-            "sv" "Swedish"
-            "no" "Norwegian"
-            "da" "Danish"
-            "fi" "Finnish"
+            "us" "English (US)" "off"
+            "uk" "English (UK)" "off"
+            "de" "German" "off"
+            "ru" "Russian" "off"
+            "hr" "Croatian" "off"
+            "dvorak" "Dvorak (US)" "off"
         )
     fi
     
     local result=$(dialog --backtitle "Telva Linux Installer" \
                           --title "Select Keyboard Layouts" \
-                          --checklist "Select one or more keyboard layouts:\n(Use space to select, enter to confirm)" 20 60 15 \
+                          --checklist "Select one or more console/shell keyboard layouts (TTY/vconsole).\n\nNote: This does NOT configure your future GUI keyboard layout.\n\nPress SPACE to select/deselect, ENTER to confirm." 22 72 12 \
                           "${layouts[@]}" 3>&1 1>&2 2>&3)
     local ret=$?
     
@@ -468,17 +429,67 @@ get_keyboard_layouts() {
     fi
 }
 
+# Get kernels to install
+get_kernels() {
+    # `dialog` doesn't support hover tooltips.
+    # Best alternative: show the one-liner directly in the checklist description column.
+    local kernel_items=(
+        "linux" "Default: best compatibility, well-tested" "on"
+        "linux-lts" "LTS: older/stable series, fewer surprises" "off"
+        "linux-zen" "Zen: tuned for responsiveness/performance" "off"
+        "linux-hardened" "Hardened: stronger security defaults" "off"
+    )
+
+    local result
+    result=$(dialog --backtitle "Telva Linux Installer" \
+                    --title "Select Kernels" \
+                    --checklist "Choose which kernels to install:\n\nPress SPACE to select/deselect, ENTER to confirm." 20 72 10 \
+                    "${kernel_items[@]}" 3>&1 1>&2 2>&3)
+    local ret=$?
+
+    if [[ $ret -ne 0 ]]; then
+        dialog --msgbox "Installation cancelled." 7 50
+        exit 1
+    fi
+
+    SELECTED_KERNELS=($result)
+    if [[ ${#SELECTED_KERNELS[@]} -eq 0 ]]; then
+        SELECTED_KERNELS=("linux")
+        dialog --msgbox "No kernels selected. Using 'linux' as default." 7 50
+    fi
+
+    # Build pacstrap kernel package list (kernel + matching headers)
+    KERNEL_PACKAGES=()
+    local k
+    for k in "${SELECTED_KERNELS[@]}"; do
+        case "$k" in
+            linux)
+                KERNEL_PACKAGES+=("linux" "linux-headers")
+                ;;
+            linux-lts)
+                KERNEL_PACKAGES+=("linux-lts" "linux-lts-headers")
+                ;;
+            linux-zen)
+                KERNEL_PACKAGES+=("linux-zen" "linux-zen-headers")
+                ;;
+            linux-hardened)
+                KERNEL_PACKAGES+=("linux-hardened" "linux-hardened-headers")
+                ;;
+        esac
+    done
+}
+
 # Get locale
 get_locale() {
     # 1. Set the default immediately
     LOCALE="en_US.UTF-8"
 
     # 2. Ask the user if they want to change the default
-    # We use 'if' directly here. This prevents 'set -e' from killing the script
-    # when the user selects "No" (which returns exit code 1).
-    if dialog --backtitle "Telva Linux Installer" \
-              --title "Locale Selection" \
-              --yesno "The default locale is configured as 'en_US.UTF-8'.\n\nDo you wish to select a different one?" 10 60; then
+    if ! dialog --backtitle "Telva Linux Installer" \
+                --title "Locale Selection" \
+                --yes-label "No" \
+                --no-label "Yes" \
+                --yesno "The default locale is configured as 'en_US.UTF-8'.\n\nDo you wish to select a different one?" 10 60; then
         
         # Get list of available locales
         local locales=()
@@ -534,36 +545,36 @@ get_locale() {
 get_country_mirrors() {
     # List of countries for mirrors
     local countries=(
-        "United States" "US"
-        "Germany" "DE"
-        "United Kingdom" "GB"
-        "France" "FR"
-        "Netherlands" "NL"
-        "Sweden" "SE"
-        "Switzerland" "CH"
-        "Canada" "CA"
-        "Australia" "AU"
-        "Japan" "JP"
-        "China" "CN"
-        "India" "IN"
-        "Brazil" "BR"
-        "Russia" "RU"
-        "Poland" "PL"
-        "Italy" "IT"
-        "Spain" "ES"
-        "Belgium" "BE"
-        "Denmark" "DK"
-        "Finland" "FI"
-        "Norway" "NO"
-        "Austria" "AT"
-        "Czech Republic" "CZ"
-        "Greece" "GR"
-        "Ireland" "IE"
-        "Portugal" "PT"
-        "Singapore" "SG"
-        "South Korea" "KR"
-        "Taiwan" "TW"
-    )
+    "Australia" "AU"
+    "Austria" "AT"
+    "Belgium" "BE"
+    "Brazil" "BR"
+    "Canada" "CA"
+    "China" "CN"
+    "Czech Republic" "CZ"
+    "Denmark" "DK"
+    "Finland" "FI"
+    "France" "FR"
+    "Germany" "DE"
+    "Greece" "GR"
+    "India" "IN"
+    "Ireland" "IE"
+    "Italy" "IT"
+    "Japan" "JP"
+    "Netherlands" "NL"
+    "Norway" "NO"
+    "Poland" "PL"
+    "Portugal" "PT"
+    "Russia" "RU"
+    "Singapore" "SG"
+    "South Korea" "KR"
+    "Spain" "ES"
+    "Sweden" "SE"
+    "Switzerland" "CH"
+    "Taiwan" "TW"
+    "United Kingdom" "GB"
+    "United States" "US"
+)
     
     # Create checklist
     local checklist_items=()
@@ -573,7 +584,7 @@ get_country_mirrors() {
     
     local result=$(dialog --backtitle "Telva Linux Installer" \
                           --title "Select Mirror Countries" \
-                          --checklist "Select one or more countries for mirror selection:\n(Use space to select, enter to confirm)" 20 60 15 \
+                          --checklist "Select one or more countries for mirror selection:\n\nPress SPACE to select/deselect, ENTER to confirm." 20 60 15 \
                           "${checklist_items[@]}" 3>&1 1>&2 2>&3)
     local ret=$?
     
@@ -878,7 +889,7 @@ install_base() {
     dialog --infobox "Installing base system and essential packages..." 5 60
     
     # Base packages
-    pacstrap "$MOUNT_POINT" base base-devel linux linux-headers linux-firmware \
+    pacstrap "$MOUNT_POINT" base base-devel wget "${KERNEL_PACKAGES[@]}" linux-firmware \
              btrfs-progs networkmanager dialog reflector nano sudo \
              grub efibootmgr dosfstools os-prober mtools
     
@@ -902,31 +913,17 @@ generate_fstab() {
 
 # Configure zram swap
 configure_zram_swap() {
-    dialog --infobox "Configuring zram swap..." 5 50
+    dialog --infobox "Installing and configuring zram-generator..." 5 50
     
-    # Create zram service file
-    cat > "$MOUNT_POINT/etc/systemd/system/zram.service" <<'EOF'
-[Unit]
-Description=Swap with zram
-After=multi-user.target
+    # 1. Install the generator package
+    arch-chroot "$MOUNT_POINT" pacman -S --noconfirm zram-generator
 
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStartPre=/sbin/modprobe zram
-ExecStart=/usr/bin/bash -c 'echo lz4 > /sys/block/zram0/comp_algorithm'
-ExecStart=/usr/bin/bash -c 'echo 50% > /sys/block/zram0/disksize'
-ExecStart=/usr/bin/mkswap /dev/zram0
-ExecStart=/usr/bin/swapon /dev/zram0 --priority 5
-ExecStop=/usr/bin/swapoff /dev/zram0
-ExecStop=/usr/bin/rmmod zram
-
-[Install]
-WantedBy=multi-user.target
+    # 2. Create the configuration file
+    # This sets zram to 50% of total RAM and uses lz4 compression
+    cat > "$MOUNT_POINT/etc/systemd/zram-generator.conf" <<'EOF'
+[zram0]
+zram-size = min(ram / 2, 4096)
 EOF
-    
-    # Enable zram service
-    arch-chroot "$MOUNT_POINT" systemctl enable zram.service
 }
 
 # Configure system
@@ -945,20 +942,8 @@ configure_system() {
     if [[ ${#KEYBOARD_LAYOUTS[@]} -gt 0 ]]; then
         local keymap_line="KEYMAP=${KEYBOARD_LAYOUTS[0]}"
         echo "$keymap_line" > "$MOUNT_POINT/etc/vconsole.conf"
-        
-        # Set additional layouts in X11 config (if X11 is installed later)
-        mkdir -p "$MOUNT_POINT/etc/X11/xorg.conf.d"
-        cat > "$MOUNT_POINT/etc/X11/xorg.conf.d/00-keyboard.conf" <<EOF
-Section "InputClass"
-    Identifier "system-keyboard"
-    MatchIsKeyboard "on"
-    Option "XkbLayout" "$(IFS=,; echo "${KEYBOARD_LAYOUTS[*]}")"
-    Option "XkbModel" "pc105"
-    Option "XkbOptions" "grp:alt_shift_toggle"
-EndSection
-EOF
-        
-        # Set systemd-localed if available (for systemd)
+
+        # Set systemd-localed if available (for console keymap)
         if [[ -f "$MOUNT_POINT/usr/bin/localectl" ]]; then
             arch-chroot "$MOUNT_POINT" localectl set-keymap "${KEYBOARD_LAYOUTS[0]}" 2>/dev/null || true
         fi
@@ -1033,6 +1018,7 @@ main() {
     get_user_password
     get_timezone
     get_keyboard_layouts
+    get_kernels
     get_locale
     get_country_mirrors
     update_mirrors
@@ -1053,9 +1039,11 @@ main() {
     esac
     
     # Confirm before proceeding
+    local kernels_display
+    kernels_display=$(IFS=' '; echo "${SELECTED_KERNELS[*]}")
     dialog --backtitle "Telva Linux Installer" \
            --title "Confirm Installation" \
-           --yesno "Ready to install Telva Linux!\n\nDisk: $INSTALL_DISK\nRoot Partition: $ROOT_PARTITION\nUsername: $USERNAME\n\nContinue with installation?" 12 60
+           --yesno "Ready to install Telva Linux!\n\nDisk: $INSTALL_DISK\nRoot Partition: $ROOT_PARTITION\nKernels: $kernels_display\nUsername: $USERNAME\n\nContinue with installation?" 13 70
     
     if [[ $? -ne 0 ]]; then
         dialog --msgbox "Installation cancelled." 7 50
