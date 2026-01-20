@@ -230,7 +230,7 @@ get_root_password() {
             # unless we capture it via an `if dialog ...; then ... else ... fi` block.
             if dialog --backtitle "Telva Linux Installer" \
                       --title "Lock Root Account" \
-                      --yesno "WARNING: You left the root password blank.\n\nDo you want to lock the root account?\n(Recommended for security)\n\nSelect 'No' to go back and set a root password." 12 70; then
+                      --yesno "NOTE: You left the root password blank.\n\nDo you want to lock the root account?\n(Recommended for security)\n\nSelect 'No' to go back and set a root password." 12 70; then
                 LOCK_ROOT=true
                 break
             else
