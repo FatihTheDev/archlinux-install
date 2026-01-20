@@ -913,31 +913,17 @@ generate_fstab() {
 
 # Configure zram swap
 configure_zram_swap() {
-    dialog --infobox "Configuring zram swap..." 5 50
+    dialog --infobox "Installing and configuring zram-generator..." 5 50
     
-    # Create zram service file
-    cat > "$MOUNT_POINT/etc/systemd/system/zram.service" <<'EOF'
-[Unit]
-Description=Swap with zram
-After=multi-user.target
+    # 1. Install the generator package
+    arch-chroot "$MOUNT_POINT" pacman -S --noconfirm zram-generator
 
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStartPre=/sbin/modprobe zram
-ExecStart=/usr/bin/bash -c 'echo lz4 > /sys/block/zram0/comp_algorithm'
-ExecStart=/usr/bin/bash -c 'echo 50% > /sys/block/zram0/disksize'
-ExecStart=/usr/bin/mkswap /dev/zram0
-ExecStart=/usr/bin/swapon /dev/zram0 --priority 5
-ExecStop=/usr/bin/swapoff /dev/zram0
-ExecStop=/usr/bin/rmmod zram
-
-[Install]
-WantedBy=multi-user.target
+    # 2. Create the configuration file
+    # This sets zram to 50% of total RAM and uses lz4 compression
+    cat > "$MOUNT_POINT/etc/systemd/zram-generator.conf" <<'EOF'
+[zram0]
+zram-size = min(ram / 2, 4096)
 EOF
-    
-    # Enable zram service
-    arch-chroot "$MOUNT_POINT" systemctl enable zram.service
 }
 
 # Configure system
