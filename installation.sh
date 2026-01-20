@@ -913,28 +913,53 @@ generate_fstab() {
 
 # Configure zram swap and disable zswap (GRUB specific)
 configure_zram_swap() {
-    dialog --infobox "Installing zram-generator and disabling zswap in GRUB..." 5 50
+    dialog --infobox "Configuring zram-generator and disabling zswap..." 5 50
 
-    # 1. Install the generator package
+    # 1. Install zram-generator inside the new system
     arch-chroot "$MOUNT_POINT" pacman -S --noconfirm zram-generator
 
-    # 2. Create the zram configuration file
-    cat > "$MOUNT_POINT/etc/systemd/zram-generator.conf" <<'EOF'
+    # 2. Write zram-generator configuration
+    cat > "$MOUNT_POINT/etc/systemd/zram-generator.conf" << 'EOF'
 [zram0]
 zram-size = min(ram / 2, 4096)
 EOF
 
-    # 3. Disable zswap in /etc/default/grub
-    # This checks if the parameter exists; if not, it inserts it into the default line
-    if ! grep -q "zswap.enabled=0" "$MOUNT_POINT/etc/default/grub"; then
-        sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="/&zswap.enabled=0 /' "$MOUNT_POINT/etc/default/grub"
+    # 3. Ensure GRUB is actually using a mounted boot partition
+    if ! findmnt "$MOUNT_POINT/boot" > /dev/null; then
+        echo "ERROR: /boot is not mounted inside the target root."
+        echo "The GRUB configuration cannot be updated."
+        exit 1
     fi
 
-    # 4. Regenerate the GRUB configuration
-    # This applies the change to the actual /boot/grub/grub.cfg file
-    arch-chroot "$MOUNT_POINT" grub-mkconfig -o /boot/grub/grub.cfg
+    # 4. Insert zswap.enabled=0 into GRUB_CMDLINE_LINUX_DEFAULT safely
 
-systemctl daemon-reload
+    GRUB_FILE="$MOUNT_POINT/etc/default/grub"
+
+    # If the line exists but commented, uncomment it
+    sed -i 's/^#GRUB_CMDLINE_LINUX_DEFAULT=/GRUB_CMDLINE_LINUX_DEFAULT=/' "$GRUB_FILE"
+
+    # Replace the value cleanly (preserves the rest of the line content)
+    sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT="\([^"]*\)"/GRUB_CMDLINE_LINUX_DEFAULT="zswap.enabled=0 \1"/' "$GRUB_FILE"
+
+    # Prevent duplicates if run more than once
+    sed -i 's/zswap.enabled=0 //2g' "$GRUB_FILE"
+
+    # 5. Regenerate grub.cfg
+    if [ -d "$MOUNT_POINT/boot/grub" ]; then
+        # Standard BIOS/EFI GRUB location
+        arch-chroot "$MOUNT_POINT" grub-mkconfig -o /boot/grub/grub.cfg
+
+    elif [ -d "$MOUNT_POINT/boot/efi/EFI/GRUB" ]; then
+        # EFI installation using EFI path for GRUB
+        arch-chroot "$MOUNT_POINT" grub-mkconfig -o /boot/efi/EFI/GRUB/grub.cfg
+
+    else
+        echo "ERROR: Could not locate GRUB directory in /boot."
+        exit 1
+    fi
+
+    # 6. Reload systemd configuration for zram-generator (inside the target)
+    arch-chroot "$MOUNT_POINT" systemctl daemon-reload
 }
 
 # Configure system
