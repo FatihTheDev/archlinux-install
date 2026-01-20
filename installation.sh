@@ -403,72 +403,68 @@ get_keyboard_layouts() {
     # Get list of available keyboard layouts
     local layouts=()
     
-    # 1. Try using localectl (Systemd systems)
-    # logic: localectl output is usually just "us", "de", etc. without descriptions.
+    # Try using localectl if available
     if command -v localectl &> /dev/null; then
         while IFS= read -r line; do
-            # Clean whitespace
-            local layout=$(echo "$line" | xargs)
-            if [[ -n "$layout" ]]; then
-                # Use the layout code as the description too if no desc exists
-                layouts+=("$layout" "$layout" "off")
+            if [[ "$line" =~ ^[[:space:]]*([a-z]{2}(_[A-Z]{2})?)[[:space:]]+.*$ ]]; then
+                local layout="${BASH_REMATCH[1]}"
+                local desc=$(echo "$line" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')
+                layouts+=("$layout" "$desc")
             fi
         done < <(localectl list-keymaps 2>/dev/null | head -50)
     fi
     
-    # 2. Fallback: try reading from X11 rules (Debian/Arch based)
-    # logic: Only run if previous step failed to find layouts
+    # Fallback: try reading from X11 rules
     if [[ ${#layouts[@]} -eq 0 ]] && [[ -f /usr/share/X11/xkb/rules/base.lst ]]; then
         while IFS= read -r line; do
-            if [[ "$line" =~ ^[[:space:]]*([a-z]{2})[[:space:]]+(.*)$ ]]; then
+            if [[ "$line" =~ ^[[:space:]]*([a-z]{2})[[:space:]]+.*$ ]]; then
                 local layout="${BASH_REMATCH[1]}"
-                local desc=$(echo "${BASH_REMATCH[2]}" | xargs)
-                layouts+=("$layout" "$desc" "off")
+                local desc=$(echo "$line" | sed 's/^[[:space:]]*[^[:space:]]*[[:space:]]*//')
+                layouts+=("$layout" "$desc")
             fi
         done < <(grep "^[[:space:]]*[a-z]\{2\}[[:space:]]" /usr/share/X11/xkb/rules/base.lst | head -50)
     fi
     
-    # 3. Hardcoded Fallback
-    # logic: If both above failed, use this manual list
+    # Fallback common layouts if nothing found
     if [[ ${#layouts[@]} -eq 0 ]]; then
         layouts=(
-            "us" "English (US)" "off"
-            "uk" "English (UK)" "off"
-            "de" "German" "off"
-            "fr" "French" "off"
-            "es" "Spanish" "off"
-            "it" "Italian" "off"
-            "pt" "Portuguese" "off"
-            "ru" "Russian" "off"
-            "jp" "Japanese" "off"
-            "cn" "Chinese" "off"
+            "us" "English (US)"
+            "uk" "English (UK)"
+            "de" "German"
+            "fr" "French"
+            "es" "Spanish"
+            "it" "Italian"
+            "pt" "Portuguese"
+            "ru" "Russian"
+            "jp" "Japanese"
+            "cn" "Chinese"
+            "tr" "Turkish"
+            "pl" "Polish"
+            "nl" "Dutch"
+            "sv" "Swedish"
+            "no" "Norwegian"
+            "da" "Danish"
+            "fi" "Finnish"
         )
     fi
-
-    # DEBUG: Uncomment the next line if it still fails to see what is being passed
-    # echo "${layouts[@]}" > /tmp/debug_layouts.txt
-
-    local result
-    result=$(dialog --backtitle "Telva Linux Installer" \
-                    --title "Select Keyboard Layouts" \
-                    --checklist "Select one or more keyboard layouts:\n(Use space to select, enter to confirm)" 20 60 15 \
-                    "${layouts[@]}" 3>&1 1>&2 2>&3)
     
+    local result=$(dialog --backtitle "Telva Linux Installer" \
+                          --title "Select Keyboard Layouts" \
+                          --checklist "Select one or more keyboard layouts:\n(Use space to select, enter to confirm)" 20 60 15 \
+                          "${layouts[@]}" 3>&1 1>&2 2>&3)
     local ret=$?
     
-    # Handle Cancel or Error
     if [[ $ret -ne 0 ]]; then
-        dialog --msgbox "Keyboard selection cancelled or failed. Defaulting to 'us'." 7 50
-        KEYBOARD_LAYOUTS=("us")
-        return 0
+        dialog --msgbox "Installation cancelled." 7 50
+        exit 1
     fi
     
-    # Convert result string to array
     KEYBOARD_LAYOUTS=($result)
     
-    # Safety check
+    # Default to US if nothing selected
     if [[ ${#KEYBOARD_LAYOUTS[@]} -eq 0 ]]; then
         KEYBOARD_LAYOUTS=("us")
+        dialog --msgbox "No keyboard layouts selected. Using 'us' as default." 7 50
     fi
 }
 
