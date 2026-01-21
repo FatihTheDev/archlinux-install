@@ -924,6 +924,7 @@ configure_zram_swap() {
     zram-size = min(ram / 2, 4096)
 EOF
 
+
     # 3. Disable zswap permanently via kernel parameter
     if [ -f "$MOUNT_POINT/etc/default/grub" ]; then
         arch-chroot "$MOUNT_POINT" sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)"/\1 zswap.enabled=0"/' /etc/default/grub
