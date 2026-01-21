@@ -919,10 +919,10 @@ configure_zram_swap() {
     arch-chroot "$MOUNT_POINT" pacman -S --noconfirm zram-generator
 
     # 2. Write zram-generator configuration
-    cat > "$MOUNT_POINT/etc/systemd/zram-generator.conf" <<'EOT'
+    cat > "$MOUNT_POINT/etc/systemd/zram-generator.conf" << 'EOF'
     [zram0]
     zram-size = min(ram / 2, 4096)
-    EOT
+EOF
 
     # 3. Disable zswap permanently via kernel parameter
     if [ -f "$MOUNT_POINT/etc/default/grub" ]; then
