@@ -920,14 +920,19 @@ configure_zram_swap() {
 
     # 2. Write zram-generator configuration
     cat > "$MOUNT_POINT/etc/systemd/zram-generator.conf" << 'EOF'
-[zram0]
-zram-size = min(ram / 2, 4096)
-EOF
+    [zram0]
+    zram-size = min(ram / 2, 4096)
+    EOF
 
-    # 3. Disable zswap permanently via modprobe
-    echo "options zswap enabled=0" > "$MOUNT_POINT/etc/modprobe.d/zswap.conf"
+    # 3. Disable zswap permanently via kernel parameter
+    if [ -f "$MOUNT_POINT/etc/default/grub" ]; then
+        arch-chroot "$MOUNT_POINT" sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)"/\1 zswap.enabled=0"/' /etc/default/grub
+    fi
 
-    # 4. Reload systemd configuration for zram-generator (inside the target)
+    # 4. Rebuild GRUB
+    arch-chroot "$MOUNT_POINT" grub-mkconfig -o /boot/grub/grub.cfg
+
+    # 5. Reload systemd configuration for zram-generator (inside the target)
     arch-chroot "$MOUNT_POINT" systemctl daemon-reload
 }
 
