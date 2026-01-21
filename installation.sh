@@ -922,7 +922,8 @@ configure_zram_swap() {
     cat > "$MOUNT_POINT/etc/systemd/zram-generator.conf" << 'EOF'
     [zram0]
     zram-size = min(ram / 2, 4096)
-    EOF
+EOF
+
 
     # 3. Disable zswap permanently via kernel parameter
     if [ -f "$MOUNT_POINT/etc/default/grub" ]; then
@@ -979,7 +980,7 @@ configure_system() {
     echo "archlinux" > "$MOUNT_POINT/etc/hostname"
 
     # Configure hosts file
-    cat > "$MOUNT_POINT/etc/hosts" <<EOF
+    cat > "$MOUNT_POINT/etc/hosts" <<'EOF'
     127.0.0.1	localhost
     ::1		localhost
     127.0.1.1	archlinux.localdomain	archlinux
