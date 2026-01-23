@@ -1017,6 +1017,47 @@ configure_zram_swap
 arch-chroot "$MOUNT_POINT" grub-mkconfig -o /boot/grub/grub.cfg
 }
 
+# Run post-installation scripts (archsetup.sh and hyprland-setup.sh)
+run_post_install_scripts() {
+    dialog --infobox "Configuring environment...\n\nThis may take several minutes.\n\nRunning post-installation scripts..." 8 60
+    
+    # Ensure sudoers.d directory exists
+    mkdir -p "$MOUNT_POINT/etc/sudoers.d"
+    
+    # Temporarily grant passwordless sudo to the new user for the scripts
+    # This is safe since we're in a controlled installation environment
+    echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" > "$MOUNT_POINT/etc/sudoers.d/post-install-temp"
+    chmod 0440 "$MOUNT_POINT/etc/sudoers.d/post-install-temp"
+    
+    # Download and run archsetup.sh
+    dialog --infobox "Configuring environment...\n\nStep 1/2: Running archsetup.sh..." 8 60
+    
+    arch-chroot "$MOUNT_POINT" su - "$USERNAME" -c "
+        cd ~ && \
+        wget -qO ~/archsetup.sh https://raw.githubusercontent.com/FatihTheDev/archlinux-post-install/main/archsetup.sh && \
+        bash ~/archsetup.sh || true
+    " || {
+        dialog --msgbox "Warning: archsetup.sh encountered an error, but continuing..." 8 60
+    }
+    
+    # Download and run hyprland-setup.sh
+    dialog --infobox "Configuring environment...\n\nStep 2/2: Running hyprland-setup.sh..." 8 60
+    
+    arch-chroot "$MOUNT_POINT" su - "$USERNAME" -c "
+        cd ~ && \
+        wget -qO ~/hyprland-setup.sh https://raw.githubusercontent.com/FatihTheDev/archlinux-tiling-wm-config/main/hyprland-setup.sh && \
+        bash ~/hyprland-setup.sh || true
+    " || {
+        dialog --msgbox "Warning: hyprland-setup.sh encountered an error, but continuing..." 8 60
+    }
+    
+    # Remove temporary passwordless sudo (cleanup)
+    rm -f "$MOUNT_POINT/etc/sudoers.d/post-install-temp"
+    
+    dialog --infobox "Environment configuration complete!" 5 50
+    sleep 2
+}
+
 # Main installation function
 main() {
     check_root
@@ -1066,6 +1107,9 @@ main() {
     install_base
     generate_fstab
     configure_system
+
+    # Run post-installation scripts
+    run_post_install_scripts
 
     dialog --backtitle "Telva Linux Installer" \
         --title "Installation Complete" \
