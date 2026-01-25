@@ -1098,21 +1098,17 @@ run_post_install_scripts() {
     dialog --infobox "Configuring environment...\n\nStep 1/2: Running archsetup.sh..." 8 60
     
     arch-chroot "$MOUNT_POINT" su - "$USERNAME" -c "
-        cd ~ && \
-        wget -qO ~/archsetup.sh https://raw.githubusercontent.com/FatihTheDev/archlinux-post-install/main/archsetup.sh && \
-        bash ~/archsetup.sh || true
-    " || {
-        dialog --msgbox "Warning: archsetup.sh encountered an error, but continuing..." 8 60
-    }
-    
+    wget -qO- https://raw.githubusercontent.com/FatihTheDev/archlinux-post-install/main/archsetup.sh | bash || true
+" || {
+    dialog --msgbox "Warning: archsetup.sh encountered an error, but continuing..." 8 60
+}
+
     # Download and run hyprland-setup.sh
     dialog --infobox "Configuring environment...\n\nStep 2/2: Running hyprland-setup.sh..." 8 60
-    
+
     arch-chroot "$MOUNT_POINT" su - "$USERNAME" -c "
-        cd ~ && \
-        wget -qO ~/hyprland-setup.sh https://raw.githubusercontent.com/FatihTheDev/archlinux-tiling-wm-config/main/hyprland-setup.sh && \
-        bash ~/hyprland-setup.sh || true
-    " || {
+    wget -qO- https://raw.githubusercontent.com/FatihTheDev/archlinux-tiling-wm-config/main/hyprland-setup.sh | bash || true
+" || {
         dialog --msgbox "Warning: hyprland-setup.sh encountered an error, but continuing..." 8 60
     }
     
