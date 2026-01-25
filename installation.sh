@@ -144,6 +144,7 @@ SELECTED_COUNTRIES=()
 TIMEZONE=""
 KEYBOARD_LAYOUTS=()
 LOCALE=""
+SELECTED_GPUS=()
 SELECTED_KERNELS=()
 KERNEL_PACKAGES=()
 INSTALL_DISK=""
@@ -404,7 +405,7 @@ get_keyboard_layouts() {
             "uk" "English (UK)" "off"
             "de" "German" "off"
             "ru" "Russian" "off"
-            "hr" "Croatian" "off"
+            "croat" "Croatian" "off"
             "dvorak" "Dvorak (US)" "off"
         )
     fi
@@ -427,6 +428,70 @@ get_keyboard_layouts() {
         KEYBOARD_LAYOUTS=("us")
         dialog --msgbox "No keyboard layouts selected. Using 'us' as default." 7 50
     fi
+}
+
+# Install GPU drivers
+get_gpu() {
+    local gpu_items=(
+        "Intel" "For Intel GPUs (open-source)" "off"
+        "AMD" "For AMD GPUs (open-source)" "off"
+        "Nvidia (Open Kernel Modules)" "For newer Nvidia GPUs - Turing+" "off"
+        "Nvidia (Proprietary)" "For older Nvidia GPUs (pre-Turing)" "off"
+        "Nvidia (Nouveau)" "Community-driven fully open-source Nvidia drivers (may have performance quirks)" "off"
+    )
+
+    local result ret
+
+    # Loop until user selects at least one GPU
+    while true; do
+        result=$(dialog --backtitle "Telva Linux Installer" \
+            --title "Select your GPU" \
+            --checklist "Choose which GPU drivers to install:\n\nPress SPACE to select/deselect, ENTER to confirm." \
+            20 72 10 \
+            "${gpu_items[@]}" \
+            3>&1 1>&2 2>&3)
+
+        ret=$?
+
+        # If the user presses Cancel or ESC, abort the installer
+        if [[ $ret -ne 0 ]]; then
+            dialog --msgbox "Installation cancelled." 7 50
+            exit 1
+        fi
+
+        SELECTED_GPUS=($result)
+
+        # If at least one driver selected, break the loop
+        if [[ ${#SELECTED_GPUS[@]} -gt 0 ]]; then
+            break
+        fi
+
+        # Otherwise, warn and re-open the checklist
+        dialog --msgbox "Please select your GPU before proceeding." 7 50
+    done
+
+    # Build GPU_PACKAGES
+    GPU_PACKAGES=()
+    local k
+    for k in "${SELECTED_GPUS[@]}"; do
+        case "$k" in
+            "Intel")
+                GPU_PACKAGES+=("intel-media-driver" "libva-intel-driver" "mesa" "vulkan-intel" "xorg-server" "xorg-xinit")
+                ;;
+            "AMD")
+                GPU_PACKAGES+=("libva-mesa-driver" "mesa" "vulkan-radeon" "xf86-video-amdgpu" "xf86-video-ati" "xorg-server" "xorg-xinit")
+                ;;
+            "Nvidia (Open Kernel Modules)")
+                GPU_PACKAGES+=("dkms" "libva-nvidia-driver" "nvidia-open-dkms" "xorg-server" "xorg-xinit")
+                ;;
+            "Nvidia (Proprietary)")
+                GPU_PACKAGES+=("dkms" "libva-nvidia-driver" "nvidia-dkms" "xorg-server" "xorg-xinit")
+                ;;
+            "Nvidia (Nouveau)")
+                GPU_PACKAGES+=("libva-mesa-driver" "mesa" "vulkan-nouveau" "xf86-video-nouveau" "xorg-server" "xorg-xinit")
+                ;;
+        esac
+    done
 }
 
 # Get kernels to install
@@ -889,7 +954,7 @@ install_base() {
     dialog --infobox "Installing base system and essential packages..." 5 60
 
     # Base packages
-    pacstrap "$MOUNT_POINT" base base-devel wget "${KERNEL_PACKAGES[@]}" linux-firmware \
+    pacstrap "$MOUNT_POINT" base base-devel wget "${GPU_PACKAGES[@]}" "${KERNEL_PACKAGES[@]}" linux-firmware \
         btrfs-progs networkmanager dialog reflector nano sudo \
         grub efibootmgr dosfstools os-prober mtools
 
@@ -1051,7 +1116,7 @@ run_post_install_scripts() {
         dialog --msgbox "Warning: hyprland-setup.sh encountered an error, but continuing..." 8 60
     }
     
-    # Remove temporary passwordless sudo (cleanup)
+    # Remove temporary passwordless sudo and external psot-install scripts (cleanup)
     rm -f "$MOUNT_POINT/etc/sudoers.d/post-install-temp"
     
     dialog --infobox "Environment configuration complete!" 5 50
@@ -1071,6 +1136,7 @@ main() {
     get_user_password
     get_timezone
     get_keyboard_layouts
+    get_gpu
     get_kernels
     get_locale
     get_country_mirrors
