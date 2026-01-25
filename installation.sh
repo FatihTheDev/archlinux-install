@@ -1085,39 +1085,30 @@ arch-chroot "$MOUNT_POINT" grub-mkconfig -o /boot/grub/grub.cfg
 # Run post-installation scripts (archsetup.sh and hyprland-setup.sh)
 run_post_install_scripts() {
     dialog --infobox "Configuring environment...\n\nThis may take several minutes.\n\nRunning post-installation scripts..." 8 60
-    
+
     # Ensure sudoers.d directory exists
     mkdir -p "$MOUNT_POINT/etc/sudoers.d"
-    
-    # Temporarily grant passwordless sudo to the new user for the scripts
-    # This is safe since we're in a controlled installation environment
+
+    # Temporarily grant passwordless sudo to the new user
     echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" > "$MOUNT_POINT/etc/sudoers.d/post-install-temp"
     chmod 0440 "$MOUNT_POINT/etc/sudoers.d/post-install-temp"
-    
-    # Download and run archsetup.sh
-    dialog --infobox "Configuring environment...\n\nStep 1/2: Running archsetup.sh..." 8 60
-    
-    arch-chroot "$MOUNT_POINT" su - "$USERNAME" -c "
-    wget -qO- https://raw.githubusercontent.com/FatihTheDev/archlinux-post-install/main/archsetup.sh | bash || true
-" || {
-    dialog --msgbox "Warning: archsetup.sh encountered an error, but continuing..." 8 60
-}
 
-    # Download and run hyprland-setup.sh
-    dialog --infobox "Configuring environment...\n\nStep 2/2: Running hyprland-setup.sh..." 8 60
+    dialog --infobox "Configuring environment...\n\nRunning setup scripts..." 8 60
 
-    arch-chroot "$MOUNT_POINT" su - "$USERNAME" -c "
-    wget -qO- https://raw.githubusercontent.com/FatihTheDev/archlinux-tiling-wm-config/main/hyprland-setup.sh | bash || true
-" || {
-        dialog --msgbox "Warning: hyprland-setup.sh encountered an error, but continuing..." 8 60
+    arch-chroot "$MOUNT_POINT" su - "$USERNAME" -c '
+        wget -qO- https://raw.githubusercontent.com/FatihTheDev/archlinux-post-install/main/archsetup.sh | bash && \
+        wget -qO- https://raw.githubusercontent.com/FatihTheDev/archlinux-tiling-wm-config/main/hyprland-setup.sh | bash
+    ' || {
+        dialog --msgbox "Warning: One or more post-install scripts encountered an error, but continuing..." 8 60
     }
-    
-    # Remove temporary passwordless sudo and external psot-install scripts (cleanup)
+
+    # Remove temporary passwordless sudo (cleanup)
     rm -f "$MOUNT_POINT/etc/sudoers.d/post-install-temp"
-    
+
     dialog --infobox "Environment configuration complete!" 5 50
     sleep 2
 }
+
 
 # Main installation function
 main() {
