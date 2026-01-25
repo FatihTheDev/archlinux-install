@@ -1095,12 +1095,12 @@ run_post_install_scripts() {
 
     dialog --infobox "Configuring environment...\n\nRunning setup scripts..." 8 60
 
-    arch-chroot "$MOUNT_POINT" su - "$USERNAME" -c '
-        wget -qO- https://raw.githubusercontent.com/FatihTheDev/archlinux-post-install/main/archsetup.sh | bash && \
-        wget -qO- https://raw.githubusercontent.com/FatihTheDev/archlinux-tiling-wm-config/main/hyprland-setup.sh | bash
-    ' || {
-        dialog --msgbox "Warning: One or more post-install scripts encountered an error, but continuing..." 8 60
-    }
+    arch-chroot -u "$USERNAME" "$MOUNT_POINT" /bin/bash -c '
+    wget -qO- https://raw.githubusercontent.com/FatihTheDev/archlinux-post-install/main/archsetup.sh | bash &&
+    wget -qO- https://raw.githubusercontent.com/FatihTheDev/archlinux-tiling-wm-config/main/hyprland-setup.sh | bash
+' || {
+    dialog --msgbox "Warning: One or more post-install scripts encountered an error, but continuing..." 8 60
+}   
 
     # Remove temporary passwordless sudo (cleanup)
     rm -f "$MOUNT_POINT/etc/sudoers.d/post-install-temp"
