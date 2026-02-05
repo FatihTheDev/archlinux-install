@@ -467,7 +467,7 @@ get_gpu() {
         "AMD" "For AMD GPUs (open-source)" "off"
         "Nvidia (Open Kernel Modules)" "For newer Nvidia GPUs - Turing+" "off"
         "Nvidia (Proprietary)" "For older Nvidia GPUs (pre-Turing)" "off"
-        "Nvidia (Nouveau)" "Community-driven fully open-source Nvidia drivers (may have performance quirks)" "off"
+        "Nvidia (Nouveau)" "Open-source Nvidia drivers (may have performance quirks)" "off"
     )
 
     local result ret
@@ -477,7 +477,7 @@ get_gpu() {
         result=$(dialog --backtitle "Telva Linux Installer" \
             --title "Select your GPU" \
             --checklist "Choose which GPU drivers to install:\n\nPress SPACE to select/deselect, ENTER to confirm." \
-            20 90 10 \
+            20 120 10 \
             "${gpu_items[@]}" \
             3>&1 1>&2 2>&3)
 
