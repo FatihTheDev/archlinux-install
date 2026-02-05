@@ -477,7 +477,7 @@ get_gpu() {
         result=$(dialog --backtitle "Telva Linux Installer" \
             --title "Select your GPU" \
             --checklist "Choose which GPU drivers to install:\n\nPress SPACE to select/deselect, ENTER to confirm." \
-            20 72 10 \
+            20 90 10 \
             "${gpu_items[@]}" \
             3>&1 1>&2 2>&3)
 
