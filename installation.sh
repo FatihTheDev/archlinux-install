@@ -140,6 +140,7 @@ ROOT_PASSWORD=""
 LOCK_ROOT=false
 USERNAME=""
 USER_PASSWORD=""
+HOSTNAME="archlinux"
 SELECTED_COUNTRIES=()
 TIMEZONE=""
 KEYBOARD_LAYOUTS=()
@@ -321,6 +322,35 @@ get_user_password() {
         fi
     done
 }
+
+# Get hostname
+get_hostname() {
+    while true; do
+        HOSTNAME=$(dialog --backtitle "Telva Linux Installer" \
+            --title "Hostname" \
+            --inputbox "Enter hostname for this system:" 10 60 "archlinux" 3>&1 1>&2 2>&3)
+        local ret=$?
+
+        if [[ $ret -ne 0 ]]; then
+            dialog --msgbox "Installation cancelled." 7 50
+            exit 1
+        fi
+
+        if [[ -z "$HOSTNAME" ]]; then
+            HOSTNAME="archlinux"
+            break
+        fi
+
+        # Validate hostname (RFC 1123: letters, numbers, hyphens, dots; max 253 chars)
+        if [[ ! "$HOSTNAME" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$ ]] || [[ ${#HOSTNAME} -gt 253 ]]; then
+            dialog --msgbox "Invalid hostname!\n\nHostname must:\n- Start and end with alphanumeric characters\n- Contain only letters, numbers, hyphens, and dots\n- Be 253 characters or less" 10 60
+            continue
+        fi
+
+        break
+    done
+}
+
 
 # Get timezone
 get_timezone() {
@@ -1042,7 +1072,7 @@ configure_system() {
     fi
 
     # Set hostname
-    echo "archlinux" > "$MOUNT_POINT/etc/hostname"
+    echo "$HOSTNAME" > "$MOUNT_POINT/etc/hostname"
 
     # Configure hosts file
     cat > "$MOUNT_POINT/etc/hosts" <<'EOF'
@@ -1121,6 +1151,7 @@ main() {
     get_root_password
     get_username
     get_user_password
+    get_hostname
     get_timezone
     get_keyboard_layouts
     get_gpu
