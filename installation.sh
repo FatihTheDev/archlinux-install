@@ -763,16 +763,31 @@ is_uefi() {
     [[ -d /sys/firmware/efi ]]
 }
 
+# Check if disk has existing partitions/data
+disk_has_data() {
+    local disk="$1"
+    parted -s "$disk" print 2>/dev/null | grep -qE '^[[:space:]]+[0-9]+[[:space:]]+[0-9]'
+}
+
 # Partition disk - full disk
 partition_full_disk() {
     local disk="/dev/$INSTALL_DISK"
 
-    dialog --backtitle "Telva Linux Installer" \
-        --title "WARNING" \
-        --yesno "WARNING: This will erase ALL data on $disk!\n\nAre you sure you want to continue?" 10 60
-
-    if [[ $? -ne 0 ]]; then
-        exit 1
+    if disk_has_data "$disk"; then
+        dialog --backtitle "Telva Linux Installer" \
+            --title "Disk has existing data" \
+            --yesno "There is already data on this disk ($disk).\n\nDo you want to overwrite it with Telva Linux?\n\nAll existing data will be permanently erased." 12 60
+        if [[ $? -ne 0 ]]; then
+            dialog --msgbox "Installation cancelled. No changes were made to the disk." 8 50
+            exit 1
+        fi
+    else
+        dialog --backtitle "Telva Linux Installer" \
+            --title "WARNING" \
+            --yesno "WARNING: This will erase ALL data on $disk!\n\nAre you sure you want to continue?" 10 60
+        if [[ $? -ne 0 ]]; then
+            exit 1
+        fi
     fi
 
     dialog --infobox "Partitioning $disk..." 5 50
