@@ -1029,45 +1029,11 @@ format_partitions() {
     fi
 }
 
-# Backup and apply pacman settings to reduce "package size exceeded" and
-# "download was less than 1 byte/s" failures (retries, no speed timeout).
-setup_pacman_for_install() {
-    PACMAN_CONF_BACKUP="/etc/pacman.conf.bak.telva.$$"
-    if [[ ! -f /etc/pacman.conf ]]; then
-        return 0
-    fi
-    cp -a /etc/pacman.conf "$PACMAN_CONF_BACKUP"
-
-    # Disable the "download was less than 1 byte/s in last 10 seconds" timeout
-    if ! grep -q '^DisableDownloadTimeout' /etc/pacman.conf; then
-        sed -i '/^\[options\]/a DisableDownloadTimeout' /etc/pacman.conf
-    fi
-
-    # Use a download command with retries and long timeout to mitigate flaky mirrors
-    if ! grep -q '^XferCommand' /etc/pacman.conf; then
-        local insert_after="^\[options\]"
-        grep -q '^DisableDownloadTimeout' /etc/pacman.conf && insert_after="^DisableDownloadTimeout"
-        if command -v curl &>/dev/null; then
-            sed -i "/${insert_after}/a XferCommand = /usr/bin/curl -C - -f -L --retry 5 --retry-delay 5 --connect-timeout 120 --max-time 0 -o %o %u" /etc/pacman.conf
-        elif command -v wget &>/dev/null; then
-            sed -i "/${insert_after}/a XferCommand = /usr/bin/wget --timeout=120 --tries=5 -c -q -O %o %u" /etc/pacman.conf
-        fi
-    fi
-}
-
-restore_pacman_conf() {
-    PACMAN_CONF_BACKUP="/etc/pacman.conf.bak.telva.$$"
-    if [[ -f "$PACMAN_CONF_BACKUP" ]]; then
-        mv -f "$PACMAN_CONF_BACKUP" /etc/pacman.conf
-    fi
-}
-
 # Install base system
 install_base() {
     local max_attempts=3
     local attempt=1
 
-    setup_pacman_for_install
 
     while [[ $attempt -le $max_attempts ]]; do
         if [[ $attempt -gt 1 ]]; then
@@ -1082,7 +1048,6 @@ install_base() {
         if pacstrap "$MOUNT_POINT" base base-devel wget curl "${GPU_PACKAGES[@]}" "${KERNEL_PACKAGES[@]}" linux-firmware \
             btrfs-progs networkmanager dialog reflector nano sudo \
             grub efibootmgr dosfstools os-prober mtools; then
-            restore_pacman_conf
             return 0
         fi
 
@@ -1091,8 +1056,6 @@ install_base() {
             dialog --msgbox "Installation attempt $((attempt - 1)) failed (e.g. package size exceeded or slow download).\n\nRetrying with refreshed mirrors in a moment." 10 55
         fi
     done
-
-    restore_pacman_conf
 
     dialog --msgbox "Error installing base system after $max_attempts attempts.\n\nTry again later or use a different mirror/country." 10 55
     exit 1
