@@ -769,6 +769,29 @@ disk_has_data() {
     parted -s "$disk" print 2>/dev/null | grep -qE '^[[:space:]]+[0-9]+[[:space:]]+[0-9]'
 }
 
+# Return 0 if the given disk is the one the system root is running from (cannot overwrite)
+is_disk_used_by_root() {
+    local disk="$1"
+    local root_source root_disk
+    root_source=$(findmnt -n -o SOURCE / 2>/dev/null) || true
+    [[ -z "$root_source" ]] && return 1
+    # Root is on this disk if it's the disk itself or a partition on it
+    [[ "$root_source" == "$disk" ]] && return 0
+    root_disk=$(lsblk -n -o PKNAME "$root_source" 2>/dev/null | head -1)
+    [[ -n "$root_disk" && "/dev/$root_disk" == "$disk" ]] && return 0
+    return 1
+}
+
+# Unmount all partitions on the given disk so parted can modify the partition table
+unmount_disk_partitions() {
+    local disk="$1"
+    local target
+    while IFS= read -r target; do
+        [[ -z "$target" ]] && continue
+        umount "$target" 2>/dev/null || true
+    done < <(findmnt -r -n -o TARGET -S "$disk" 2>/dev/null)
+}
+
 # Partition disk - full disk
 partition_full_disk() {
     local disk="/dev/$INSTALL_DISK"
@@ -789,6 +812,18 @@ partition_full_disk() {
             exit 1
         fi
     fi
+
+    # Cannot overwrite the disk we're running from
+    if is_disk_used_by_root "$disk"; then
+        dialog --msgbox "Cannot overwrite the disk the system is running from ($disk).\n\nBoot from installation media (e.g. USB) and select that disk for installation." 10 60
+        exit 1
+    fi
+
+    # Partitions must be unmounted before changing the partition table
+    dialog --infobox "Unmounting partitions on $disk..." 5 50
+    unmount_disk_partitions "$disk"
+    # Ensure swap on this disk is off so partitions are not in use
+    swapoff -a 2>/dev/null || true
 
     dialog --infobox "Partitioning $disk..." 5 50
 
