@@ -140,10 +140,12 @@ ROOT_PASSWORD=""
 LOCK_ROOT=false
 USERNAME=""
 USER_PASSWORD=""
+HOSTNAME="archlinux"
 SELECTED_COUNTRIES=()
 TIMEZONE=""
 KEYBOARD_LAYOUTS=()
 LOCALE=""
+SELECTED_GPUS=()
 SELECTED_KERNELS=()
 KERNEL_PACKAGES=()
 INSTALL_DISK=""
@@ -321,6 +323,35 @@ get_user_password() {
     done
 }
 
+# Get hostname
+get_hostname() {
+    while true; do
+        HOSTNAME=$(dialog --backtitle "Telva Linux Installer" \
+            --title "Hostname" \
+            --inputbox "Enter hostname for this system:" 10 60 "archlinux" 3>&1 1>&2 2>&3)
+        local ret=$?
+
+        if [[ $ret -ne 0 ]]; then
+            dialog --msgbox "Installation cancelled." 7 50
+            exit 1
+        fi
+
+        if [[ -z "$HOSTNAME" ]]; then
+            HOSTNAME="archlinux"
+            break
+        fi
+
+        # Validate hostname (RFC 1123: letters, numbers, hyphens, dots; max 253 chars)
+        if [[ ! "$HOSTNAME" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$ ]] || [[ ${#HOSTNAME} -gt 253 ]]; then
+            dialog --msgbox "Invalid hostname!\n\nHostname must:\n- Start and end with alphanumeric characters\n- Contain only letters, numbers, hyphens, and dots\n- Be 253 characters or less" 10 60
+            continue
+        fi
+
+        break
+    done
+}
+
+
 # Get timezone
 get_timezone() {
     local REGION
@@ -404,7 +435,7 @@ get_keyboard_layouts() {
             "uk" "English (UK)" "off"
             "de" "German" "off"
             "ru" "Russian" "off"
-            "hr" "Croatian" "off"
+            "croat" "Croatian" "off"
             "dvorak" "Dvorak (US)" "off"
         )
     fi
@@ -427,6 +458,70 @@ get_keyboard_layouts() {
         KEYBOARD_LAYOUTS=("us")
         dialog --msgbox "No keyboard layouts selected. Using 'us' as default." 7 50
     fi
+}
+
+# Install GPU drivers
+get_gpu() {
+    local gpu_items=(
+        "Intel" "For Intel GPUs (open-source)" "off"
+        "AMD" "For AMD GPUs (open-source)" "off"
+        "Nvidia (Open Kernel Modules)" "For newer Nvidia GPUs - Turing+" "off"
+        "Nvidia (Proprietary)" "For older Nvidia GPUs (pre-Turing)" "off"
+        "Nvidia (Nouveau)" "Open-source Nvidia drivers (may have performance quirks)" "off"
+    )
+
+    local result ret
+
+    # Loop until user selects at least one GPU
+    while true; do
+        result=$(dialog --backtitle "Telva Linux Installer" \
+            --title "Select your GPU" \
+            --checklist "Choose which GPU drivers to install:\n\nPress SPACE to select/deselect, ENTER to confirm." \
+            20 120 10 \
+            "${gpu_items[@]}" \
+            3>&1 1>&2 2>&3)
+
+        ret=$?
+
+        # If the user presses Cancel or ESC, abort the installer
+        if [[ $ret -ne 0 ]]; then
+            dialog --msgbox "Installation cancelled." 7 50
+            exit 1
+        fi
+
+        SELECTED_GPUS=($result)
+
+        # If at least one driver selected, break the loop
+        if [[ ${#SELECTED_GPUS[@]} -gt 0 ]]; then
+            break
+        fi
+
+        # Otherwise, warn and re-open the checklist
+        dialog --msgbox "Please select your GPU before proceeding." 7 50
+    done
+
+    # Build GPU_PACKAGES
+    GPU_PACKAGES=()
+    local k
+    for k in "${SELECTED_GPUS[@]}"; do
+        case "$k" in
+            "Intel")
+                GPU_PACKAGES+=("intel-media-driver" "libva-intel-driver" "mesa" "vulkan-intel" "xorg-server" "xorg-xinit")
+                ;;
+            "AMD")
+                GPU_PACKAGES+=("libva-mesa-driver" "mesa" "vulkan-radeon" "xf86-video-amdgpu" "xf86-video-ati" "xorg-server" "xorg-xinit")
+                ;;
+            "Nvidia (Open Kernel Modules)")
+                GPU_PACKAGES+=("dkms" "libva-nvidia-driver" "nvidia-open-dkms" "xorg-server" "xorg-xinit")
+                ;;
+            "Nvidia (Proprietary)")
+                GPU_PACKAGES+=("dkms" "libva-nvidia-driver" "nvidia-dkms" "xorg-server" "xorg-xinit")
+                ;;
+            "Nvidia (Nouveau)")
+                GPU_PACKAGES+=("libva-mesa-driver" "mesa" "vulkan-nouveau" "xf86-video-nouveau" "xorg-server" "xorg-xinit")
+                ;;
+        esac
+    done
 }
 
 # Get kernels to install
@@ -889,7 +984,7 @@ install_base() {
     dialog --infobox "Installing base system and essential packages..." 5 60
 
     # Base packages
-    pacstrap "$MOUNT_POINT" base base-devel wget "${KERNEL_PACKAGES[@]}" linux-firmware \
+    pacstrap "$MOUNT_POINT" base base-devel wget curl "${GPU_PACKAGES[@]}" "${KERNEL_PACKAGES[@]}" linux-firmware \
         btrfs-progs networkmanager dialog reflector nano sudo \
         grub efibootmgr dosfstools os-prober mtools
 
@@ -977,7 +1072,7 @@ configure_system() {
     fi
 
     # Set hostname
-    echo "archlinux" > "$MOUNT_POINT/etc/hostname"
+    echo "$HOSTNAME" > "$MOUNT_POINT/etc/hostname"
 
     # Configure hosts file
     cat > "$MOUNT_POINT/etc/hosts" <<'EOF'
@@ -1017,6 +1112,34 @@ configure_zram_swap
 arch-chroot "$MOUNT_POINT" grub-mkconfig -o /boot/grub/grub.cfg
 }
 
+# Run post-installation scripts (archsetup.sh and hyprland-setup.sh)
+run_post_install_scripts() {
+    dialog --infobox "Configuring environment...\n\nThis may take several minutes.\n\nRunning post-installation scripts..." 8 60
+
+    # Ensure sudoers.d directory exists
+    mkdir -p "$MOUNT_POINT/etc/sudoers.d"
+
+    # Temporarily grant passwordless sudo to the new user
+    echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" > "$MOUNT_POINT/etc/sudoers.d/post-install-temp"
+    chmod 0440 "$MOUNT_POINT/etc/sudoers.d/post-install-temp"
+
+    dialog --infobox "Configuring environment...\n\nRunning setup scripts..." 8 60
+
+    arch-chroot "$MOUNT_POINT" /bin/bash -c "
+        wget -qO /tmp/archsetup.sh https://raw.githubusercontent.com/FatihTheDev/archlinux-post-install/main/archsetup.sh
+        wget -qO /tmp/hyprland-setup.sh https://raw.githubusercontent.com/FatihTheDev/archlinux-tiling-wm-config/main/hyprland-setup.sh
+        export INSTALL_USER='$USERNAME'
+        bash /tmp/archsetup.sh && bash /tmp/hyprland-setup.sh
+    " || dialog --msgbox "Warning: One or more post-install scripts encountered an error, but continuing..." 8 60
+
+    # Remove temporary passwordless sudo (cleanup)
+    rm -f "$MOUNT_POINT/etc/sudoers.d/post-install-temp"
+
+    dialog --infobox "Environment configuration complete!" 5 50
+    sleep 2
+}
+
+
 # Main installation function
 main() {
     check_root
@@ -1028,8 +1151,10 @@ main() {
     get_root_password
     get_username
     get_user_password
+    get_hostname
     get_timezone
     get_keyboard_layouts
+    get_gpu
     get_kernels
     get_locale
     get_country_mirrors
@@ -1066,6 +1191,9 @@ main() {
     install_base
     generate_fstab
     configure_system
+
+    # Run post-installation scripts
+    run_post_install_scripts
 
     dialog --backtitle "Telva Linux Installer" \
         --title "Installation Complete" \
