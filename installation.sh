@@ -994,19 +994,73 @@ format_partitions() {
     fi
 }
 
+# Backup and apply pacman settings to reduce "package size exceeded" and
+# "download was less than 1 byte/s" failures (retries, no speed timeout).
+setup_pacman_for_install() {
+    PACMAN_CONF_BACKUP="/etc/pacman.conf.bak.telva.$$"
+    if [[ ! -f /etc/pacman.conf ]]; then
+        return 0
+    fi
+    cp -a /etc/pacman.conf "$PACMAN_CONF_BACKUP"
+
+    # Disable the "download was less than 1 byte/s in last 10 seconds" timeout
+    if ! grep -q '^DisableDownloadTimeout' /etc/pacman.conf; then
+        sed -i '/^\[options\]/a DisableDownloadTimeout' /etc/pacman.conf
+    fi
+
+    # Use a download command with retries and long timeout to mitigate flaky mirrors
+    if ! grep -q '^XferCommand' /etc/pacman.conf; then
+        local insert_after="^\[options\]"
+        grep -q '^DisableDownloadTimeout' /etc/pacman.conf && insert_after="^DisableDownloadTimeout"
+        if command -v curl &>/dev/null; then
+            sed -i "/${insert_after}/a XferCommand = /usr/bin/curl -C - -f -L --retry 5 --retry-delay 5 --connect-timeout 120 --max-time 0 -o %o %u" /etc/pacman.conf
+        elif command -v wget &>/dev/null; then
+            sed -i "/${insert_after}/a XferCommand = /usr/bin/wget --timeout=120 --tries=5 -c -q -O %o %u" /etc/pacman.conf
+        fi
+    fi
+}
+
+restore_pacman_conf() {
+    PACMAN_CONF_BACKUP="/etc/pacman.conf.bak.telva.$$"
+    if [[ -f "$PACMAN_CONF_BACKUP" ]]; then
+        mv -f "$PACMAN_CONF_BACKUP" /etc/pacman.conf
+    fi
+}
+
 # Install base system
 install_base() {
-    dialog --infobox "Installing base system and essential packages..." 5 60
+    local max_attempts=3
+    local attempt=1
 
-    # Base packages
-    pacstrap "$MOUNT_POINT" base base-devel wget curl "${GPU_PACKAGES[@]}" "${KERNEL_PACKAGES[@]}" linux-firmware \
-        btrfs-progs networkmanager dialog reflector nano sudo \
-        grub efibootmgr dosfstools os-prober mtools
+    setup_pacman_for_install
 
-    if [[ $? -ne 0 ]]; then
-        dialog --msgbox "Error installing base system!" 7 50
-        exit 1
-    fi
+    while [[ $attempt -le $max_attempts ]]; do
+        if [[ $attempt -gt 1 ]]; then
+            dialog --infobox "Retrying installation (attempt $attempt of $max_attempts). Updating mirror list..." 6 60
+            local country_list
+            country_list=$(IFS=','; echo "${SELECTED_COUNTRIES[*]}")
+            reflector --country "$country_list" --protocol https --latest 20 --sort rate --save /etc/pacman.d/mirrorlist 2>/dev/null || true
+        else
+            dialog --infobox "Installing base system and essential packages..." 5 60
+        fi
+
+        if pacstrap "$MOUNT_POINT" base base-devel wget curl "${GPU_PACKAGES[@]}" "${KERNEL_PACKAGES[@]}" linux-firmware \
+            btrfs-progs networkmanager dialog reflector nano sudo \
+            grub efibootmgr dosfstools os-prober mtools; then
+            restore_pacman_conf
+            return 0
+        fi
+
+        attempt=$((attempt + 1))
+        if [[ $attempt -le $max_attempts ]]; then
+            dialog --msgbox "Installation attempt $((attempt - 1)) failed (e.g. package size exceeded or slow download).\n\nRetrying with refreshed mirrors in a moment." 10 55
+        fi
+    done
+
+    restore_pacman_conf
+
+    dialog --msgbox "Error installing base system after $max_attempts attempts.\n\nTry again later or use a different mirror/country." 10 55
+    exit 1
 }
 
 # Generate fstab
