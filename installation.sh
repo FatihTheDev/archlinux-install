@@ -1180,9 +1180,7 @@ run_post_install_scripts() {
         export INSTALL_USER='$USERNAME'
         bash /tmp/archsetup.sh
         
-        local country_list
-        country_list=$(IFS=','; echo "${SELECTED_COUNTRIES[*]}")
-        reflector --country "$country_list" --protocol https --latest 20 --sort rate --save /etc/pacman.d/mirrorlist 2>/dev/null || true
+        reflector --protocol https --latest 20 --sort rate --save /etc/pacman.d/mirrorlist 2>/dev/null || true
         
         bash /tmp/hyprland-setup.sh
     " || {
