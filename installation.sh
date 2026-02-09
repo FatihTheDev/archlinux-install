@@ -769,18 +769,6 @@ disk_has_data() {
     parted -s "$disk" print 2>/dev/null | grep -qE '^[[:space:]]+[0-9]+[[:space:]]+[0-9]'
 }
 
-# Return 0 if the given disk is the one the system root is running from (cannot overwrite)
-is_disk_used_by_root() {
-    local disk="$1"
-    local root_source root_disk
-    root_source=$(findmnt -n -o SOURCE / 2>/dev/null) || true
-    [[ -z "$root_source" ]] && return 1
-    # Root is on this disk if it's the disk itself or a partition on it
-    [[ "$root_source" == "$disk" ]] && return 0
-    root_disk=$(lsblk -n -o PKNAME "$root_source" 2>/dev/null | head -1)
-    [[ -n "$root_disk" && "/dev/$root_disk" == "$disk" ]] && return 0
-    return 1
-}
 
 # Unmount all partitions on the given disk so parted can modify the partition table
 unmount_disk_partitions() {
@@ -811,12 +799,6 @@ partition_full_disk() {
         if [[ $? -ne 0 ]]; then
             exit 1
         fi
-    fi
-
-    # Cannot overwrite the disk we're running from
-    if is_disk_used_by_root "$disk"; then
-        dialog --msgbox "Cannot overwrite the disk the system is running from ($disk).\n\nBoot from installation media (e.g. USB) and select that disk for installation." 10 60
-        exit 1
     fi
 
     # Partitions must be unmounted before changing the partition table
@@ -1191,13 +1173,16 @@ run_post_install_scripts() {
     chmod 0440 "$MOUNT_POINT/etc/sudoers.d/post-install-temp"
 
     dialog --infobox "Configuring environment...\n\nRunning setup scripts..." 8 60
-
     arch-chroot "$MOUNT_POINT" /bin/bash -c "
+        set -e
         wget -qO /tmp/archsetup.sh https://raw.githubusercontent.com/FatihTheDev/archlinux-post-install/main/archsetup.sh
         wget -qO /tmp/hyprland-setup.sh https://raw.githubusercontent.com/FatihTheDev/archlinux-tiling-wm-config/main/hyprland-setup.sh
         export INSTALL_USER='$USERNAME'
-        bash /tmp/archsetup.sh && bash /tmp/hyprland-setup.sh
-    " || dialog --msgbox "Warning: One or more post-install scripts encountered an error, but continuing..." 8 60
+        bash /tmp/archsetup.sh
+        bash /tmp/hyprland-setup.sh
+    " || {
+        exit 1
+    }
 
     # Remove temporary passwordless sudo (cleanup)
     rm -f "$MOUNT_POINT/etc/sudoers.d/post-install-temp"
