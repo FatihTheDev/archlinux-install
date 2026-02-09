@@ -1168,6 +1168,10 @@ run_post_install_scripts() {
     # Ensure sudoers.d directory exists
     mkdir -p "$MOUNT_POINT/etc/sudoers.d"
 
+    # Build country list string for reflector inside the new system
+    local country_list
+    country_list=$(IFS=','; echo "${SELECTED_COUNTRIES[*]}")
+
     # Temporarily grant passwordless sudo to the new user
     echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" > "$MOUNT_POINT/etc/sudoers.d/post-install-temp"
     chmod 0440 "$MOUNT_POINT/etc/sudoers.d/post-install-temp"
@@ -1178,10 +1182,19 @@ run_post_install_scripts() {
         wget -qO /tmp/archsetup.sh https://raw.githubusercontent.com/FatihTheDev/archlinux-post-install/main/archsetup.sh
         wget -qO /tmp/hyprland-setup.sh https://raw.githubusercontent.com/FatihTheDev/archlinux-tiling-wm-config/main/hyprland-setup.sh
         export INSTALL_USER='$USERNAME'
+        export MIRROR_COUNTRIES='$country_list'
+
+        # Base post-install configuration
         bash /tmp/archsetup.sh
-        
-        reflector --protocol https --latest 20 --sort rate --save /etc/pacman.d/mirrorlist 2>/dev/null || true
-        
+
+        # Refresh mirrors inside the newly installed system using the same countries
+        reflector --country \"\$MIRROR_COUNTRIES\" \
+            --protocol https \
+            --latest 20 \
+            --sort rate \
+            --save /etc/pacman.d/mirrorlist || true
+
+        # Hyprland / desktop configuration
         bash /tmp/hyprland-setup.sh
     " || {
         exit 1
