@@ -763,17 +763,49 @@ is_uefi() {
     [[ -d /sys/firmware/efi ]]
 }
 
+# Check if disk has existing partitions/data
+disk_has_data() {
+    local disk="$1"
+    parted -s "$disk" print 2>/dev/null | grep -qE '^[[:space:]]+[0-9]+[[:space:]]+[0-9]'
+}
+
+
+# Unmount all partitions on the given disk so parted can modify the partition table
+unmount_disk_partitions() {
+    local disk="$1"
+    local target
+    while IFS= read -r target; do
+        [[ -z "$target" ]] && continue
+        umount "$target" 2>/dev/null || true
+    done < <(findmnt -r -n -o TARGET -S "$disk" 2>/dev/null)
+}
+
 # Partition disk - full disk
 partition_full_disk() {
     local disk="/dev/$INSTALL_DISK"
 
-    dialog --backtitle "Telva Linux Installer" \
-        --title "WARNING" \
-        --yesno "WARNING: This will erase ALL data on $disk!\n\nAre you sure you want to continue?" 10 60
-
-    if [[ $? -ne 0 ]]; then
-        exit 1
+    if disk_has_data "$disk"; then
+        dialog --backtitle "Telva Linux Installer" \
+            --title "Disk has existing data" \
+            --yesno "There is already data on this disk ($disk).\n\nDo you want to overwrite it with Telva Linux?\n\nAll existing data will be permanently erased." 12 60
+        if [[ $? -ne 0 ]]; then
+            dialog --msgbox "Installation cancelled. No changes were made to the disk." 8 50
+            exit 1
+        fi
+    else
+        dialog --backtitle "Telva Linux Installer" \
+            --title "WARNING" \
+            --yesno "WARNING: This will erase ALL data on $disk!\n\nAre you sure you want to continue?" 10 60
+        if [[ $? -ne 0 ]]; then
+            exit 1
+        fi
     fi
+
+    # Partitions must be unmounted before changing the partition table
+    dialog --infobox "Unmounting partitions on $disk..." 5 50
+    unmount_disk_partitions "$disk"
+    # Ensure swap on this disk is off so partitions are not in use
+    swapoff -a 2>/dev/null || true
 
     dialog --infobox "Partitioning $disk..." 5 50
 
@@ -981,17 +1013,34 @@ format_partitions() {
 
 # Install base system
 install_base() {
-    dialog --infobox "Installing base system and essential packages..." 5 60
+    local max_attempts=3
+    local attempt=1
 
-    # Base packages
-    pacstrap "$MOUNT_POINT" base base-devel wget curl "${GPU_PACKAGES[@]}" "${KERNEL_PACKAGES[@]}" linux-firmware \
-        btrfs-progs networkmanager dialog reflector nano sudo \
-        grub efibootmgr dosfstools os-prober mtools
 
-    if [[ $? -ne 0 ]]; then
-        dialog --msgbox "Error installing base system!" 7 50
-        exit 1
-    fi
+    while [[ $attempt -le $max_attempts ]]; do
+        if [[ $attempt -gt 1 ]]; then
+            dialog --infobox "Retrying installation (attempt $attempt of $max_attempts). Updating mirror list..." 6 60
+            local country_list
+            country_list=$(IFS=','; echo "${SELECTED_COUNTRIES[*]}")
+            reflector --country "$country_list" --protocol https --latest 20 --sort rate --save /etc/pacman.d/mirrorlist 2>/dev/null || true
+        else
+            dialog --infobox "Installing base system and essential packages..." 5 60
+        fi
+
+        if pacstrap "$MOUNT_POINT" base base-devel wget curl "${GPU_PACKAGES[@]}" "${KERNEL_PACKAGES[@]}" linux-firmware \
+            btrfs-progs networkmanager dialog reflector nano sudo \
+            grub efibootmgr dosfstools os-prober mtools; then
+            return 0
+        fi
+
+        attempt=$((attempt + 1))
+        if [[ $attempt -le $max_attempts ]]; then
+            dialog --msgbox "Installation attempt $((attempt - 1)) failed (e.g. package size exceeded or slow download).\n\nRetrying with refreshed mirrors in a moment." 10 55
+        fi
+    done
+
+    dialog --msgbox "Error installing base system after $max_attempts attempts.\n\nTry again later or use a different mirror/country." 10 55
+    exit 1
 }
 
 # Generate fstab
@@ -1119,18 +1168,37 @@ run_post_install_scripts() {
     # Ensure sudoers.d directory exists
     mkdir -p "$MOUNT_POINT/etc/sudoers.d"
 
+    # Build country list string for reflector inside the new system
+    local country_list
+    country_list=$(IFS=','; echo "${SELECTED_COUNTRIES[*]}")
+
     # Temporarily grant passwordless sudo to the new user
     echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" > "$MOUNT_POINT/etc/sudoers.d/post-install-temp"
     chmod 0440 "$MOUNT_POINT/etc/sudoers.d/post-install-temp"
 
     dialog --infobox "Configuring environment...\n\nRunning setup scripts..." 8 60
-
     arch-chroot "$MOUNT_POINT" /bin/bash -c "
+        set -e
         wget -qO /tmp/archsetup.sh https://raw.githubusercontent.com/FatihTheDev/archlinux-post-install/main/archsetup.sh
         wget -qO /tmp/hyprland-setup.sh https://raw.githubusercontent.com/FatihTheDev/archlinux-tiling-wm-config/main/hyprland-setup.sh
         export INSTALL_USER='$USERNAME'
-        bash /tmp/archsetup.sh && bash /tmp/hyprland-setup.sh
-    " || dialog --msgbox "Warning: One or more post-install scripts encountered an error, but continuing..." 8 60
+        export MIRROR_COUNTRIES='$country_list'
+
+        # Base post-install configuration
+        bash /tmp/archsetup.sh
+
+        # Refresh mirrors inside the newly installed system using the same countries
+        reflector --country \"\$MIRROR_COUNTRIES\" \
+            --protocol https \
+            --latest 20 \
+            --sort rate \
+            --save /etc/pacman.d/mirrorlist || true
+
+        # Hyprland / desktop configuration
+        bash /tmp/hyprland-setup.sh
+    " || {
+        exit 1
+    }
 
     # Remove temporary passwordless sudo (cleanup)
     rm -f "$MOUNT_POINT/etc/sudoers.d/post-install-temp"
