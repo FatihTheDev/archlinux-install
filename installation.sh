@@ -1179,6 +1179,15 @@ run_post_install_scripts() {
         wget -qO /tmp/hyprland-setup.sh https://raw.githubusercontent.com/FatihTheDev/archlinux-tiling-wm-config/main/hyprland-setup.sh
         export INSTALL_USER='$USERNAME'
         bash /tmp/archsetup.sh
+
+        local country_list=$(IFS=','; echo "${SELECTED_COUNTRIES[*]}")
+
+        reflector --country "$country_list" \
+            --protocol https \
+            --latest 20 \
+            --sort rate \
+            --save /etc/pacman.d/mirrorlist"
+
         bash /tmp/hyprland-setup.sh
     " || {
         exit 1
