@@ -12,3 +12,11 @@
   ```
   wget -qO- https://raw.githubusercontent.com/FatihTheDev/archlinux-install/main/installation.sh | bash
   ```
+
+  3. Wait for the script to finish, then run `poweroff`.
+ 
+  4. Pull out the USB that has the .iso out of the computer
+ 
+  5. Power your computer back on.
+ 
+  6. That's it! You should be presented with your new Telva Linux environment.
