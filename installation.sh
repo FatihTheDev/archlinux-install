@@ -704,7 +704,8 @@ update_mirrors() {
 
     reflector --country "$country_list" \
         --protocol https \
-        --latest 20 \
+        --latest 10 \
+        --fastest 5 \
         --sort rate \
         --save /etc/pacman.d/mirrorlist
 
@@ -1022,12 +1023,12 @@ install_base() {
             dialog --infobox "Retrying installation (attempt $attempt of $max_attempts). Updating mirror list..." 6 60
             local country_list
             country_list=$(IFS=','; echo "${SELECTED_COUNTRIES[*]}")
-            reflector --country "$country_list" --protocol https --latest 20 --sort rate --save /etc/pacman.d/mirrorlist 2>/dev/null || true
+            reflector --country "$country_list" --protocol https --latest 10 --fastest 5 --sort rate --save /etc/pacman.d/mirrorlist 2>/dev/null || true
         else
             dialog --infobox "Installing base system and essential packages..." 5 60
         fi
 
-        if pacstrap "$MOUNT_POINT" base base-devel wget curl "${GPU_PACKAGES[@]}" "${KERNEL_PACKAGES[@]}" linux-firmware \
+        if pacstrap "$MOUNT_POINT" base base-devel wget curl bind "${GPU_PACKAGES[@]}" "${KERNEL_PACKAGES[@]}" linux-firmware \
             btrfs-progs networkmanager dialog reflector nano sudo \
             grub efibootmgr dosfstools os-prober mtools; then
             return 0
@@ -1190,7 +1191,8 @@ run_post_install_scripts() {
         # Refresh mirrors inside the newly installed system using the same countries
         reflector --country \"\$MIRROR_COUNTRIES\" \
             --protocol https \
-            --latest 20 \
+            --latest 10 \
+            --fastest 5 \
             --sort rate \
             --save /etc/pacman.d/mirrorlist || true
 
