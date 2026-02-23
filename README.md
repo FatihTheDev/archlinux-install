@@ -13,6 +13,8 @@
   wget -qO- https://raw.githubusercontent.com/FatihTheDev/archlinux-install/main/installation.sh | bash
   ```
 
+  **Note**: This is a capital letter o, not a zero.
+
   3. Wait for the script to finish, then run `poweroff`.
  
   4. Pull out the USB that has the .iso out of the computer
