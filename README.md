@@ -25,7 +25,7 @@
      
 
 
-**Disclaimer**: To later enable virtual network 'default' *(for virtual machines)*, run this command in terminal:
+**Disclaimer**: To later enable virtual network 'default' (*for virtual machines*), run this command in terminal:
 
 ```bash
 sudo virsh net-autostart default
