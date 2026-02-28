@@ -1,15 +1,12 @@
 #!/bin/bash
 
 # Telva Linux Installation Script with ncurses TUI
-# This script provides a user-friendly installation interface similar to Debian installer
+# This script provides a user-friendly installation interface similar to Debian NetInstall
 #
 # Usage:
 #   Direct execution: sudo bash install.sh
 #   Piped execution:  sudo wget -qO- https://script-url | bash
 #   Download first:   wget -qO- https://script-url > install.sh && sudo bash install.sh
-#
-# Note: This script requires an interactive terminal for the ncurses TUI interface.
-# When piping, ensure you're running in a terminal (not via SSH without -t flag).
 
 # Use set -euo but handle piped execution gracefully
 set -eu
@@ -21,8 +18,6 @@ fi
 
 # Check for TTY (required for dialog)
 check_tty() {
-    # Dialog needs stdout and stderr to be terminals (stdin can be piped)
-    # When piping: stdin is pipe, but stdout/stderr are still terminals
     if [[ ! -t 1 ]] || [[ ! -t 2 ]]; then
         echo "ERROR: This script requires stdout and stderr to be connected to a terminal." >&2
         echo "Dialog (ncurses) needs a terminal to display the interface." >&2
@@ -43,7 +38,6 @@ check_tty() {
 
     # If TERM is not set or invalid, detect and set appropriate value
     if [[ -z "${TERM:-}" ]] || (command -v tput &> /dev/null && ! tput longname &> /dev/null 2>&1); then
-        # Detect terminal type based on device
         if [[ -n "$tty_device" ]]; then
             if [[ "$tty_device" =~ ^/dev/tty[1-9] ]] || [[ "$tty_device" =~ ^/dev/ttyS ]] || [[ "$tty_device" =~ ^/dev/console ]]; then
                 # Virtual console (tty1-tty6) or serial console - use 'linux' term
@@ -57,7 +51,6 @@ check_tty() {
             fi
         else
             # Can't detect tty device, check if we're likely in a virtual console
-            # by checking if X is running or if we're in a graphical environment
             if [[ -z "${DISPLAY:-}" ]] && [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
                 # Likely in a virtual console (TTY)
                 export TERM=linux
@@ -86,7 +79,7 @@ check_tty() {
 
     # Test if dialog can actually work
     if ! command -v dialog &> /dev/null; then
-        return 0  # Will be caught by check_dependencies
+        return 0
     fi
 
     # Test dialog with current TERM
@@ -112,10 +105,6 @@ export DIALOGRC=/dev/null
 
 # Setup dialog for TTY compatibility
 setup_dialog_colors() {
-    # Dialog automatically adapts to terminal capabilities
-    # We just need to ensure TERM is set correctly (done in check_tty)
-    # Dialog will work fine in TTY without any special options
-
     # Set dialog label defaults for consistent TTY experience
     export DIALOG_OK_LABEL="OK"
     export DIALOG_CANCEL_LABEL="Cancel"
@@ -125,7 +114,6 @@ setup_dialog_colors() {
     export DIALOG_NO_LABEL="No"
 
     # Ensure dialog can access the terminal properly
-    # This is especially important for TTY environments
     if command -v dialog &> /dev/null; then
         # Test that dialog can actually display (silent test)
         if ! dialog --print-version &> /dev/null 2>&1; then
@@ -1196,7 +1184,6 @@ run_post_install_scripts() {
             --sort rate \
             --save /etc/pacman.d/mirrorlist || true
 
-        # Hyprland / desktop configuration
         bash /tmp/hyprland-setup.sh
     " || {
         exit 1
