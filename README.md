@@ -17,7 +17,7 @@
 
   3. Wait for the script to finish, then run `poweroff`.
  
-  4. Pull out the USB that has the .iso out of the computer
+  4. Pull out the USB that has the .iso file out of the computer
  
   5. Power your computer back on.
  
