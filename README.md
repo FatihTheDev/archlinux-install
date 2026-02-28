@@ -24,6 +24,7 @@
   6. That's it! You should be presented with your new Telva Linux environment.
      
 
+
 **Disclaimer**: To later enable virtual network 'default', run this command in terminal:
 
 ```bash
