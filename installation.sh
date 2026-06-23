@@ -454,7 +454,6 @@ get_gpu() {
         "Intel" "For Intel GPUs (open-source)" "off"
         "AMD" "For AMD GPUs (open-source)" "off"
         "Nvidia (Open Kernel Modules)" "For newer Nvidia GPUs - Turing+" "off"
-        "Nvidia (Proprietary)" "For older Nvidia GPUs (pre-Turing)" "off"
         "Nvidia (Nouveau)" "Open-source Nvidia drivers (may have performance quirks)" "off"
     )
 
@@ -501,9 +500,6 @@ get_gpu() {
                 ;;
             "Nvidia (Open Kernel Modules)")
                 GPU_PACKAGES+=("dkms" "libva-nvidia-driver" "nvidia-open-dkms" "xorg-server" "xorg-xinit")
-                ;;
-            "Nvidia (Proprietary)")
-                GPU_PACKAGES+=("dkms" "libva-nvidia-driver" "nvidia-dkms" "xorg-server" "xorg-xinit")
                 ;;
             "Nvidia (Nouveau)")
                 GPU_PACKAGES+=("libva-mesa-driver" "mesa" "vulkan-nouveau" "xf86-video-nouveau" "xorg-server" "xorg-xinit")
