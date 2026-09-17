@@ -839,7 +839,7 @@ partition_free_space() {
     partprobe "$disk" 2>/dev/null || true
     udevadm settle 2>/dev/null || true
 
-    # Get the last free space block details in MiB
+    # Extract the last Free Space block from parted in MiB
     local free_line=""
     free_line=$(parted -s "$disk" unit MiB print free 2>/dev/null | grep -i "free space" | tail -1)
 
@@ -884,45 +884,35 @@ partition_free_space() {
         efi_part_num="${efi_part_num:-}"
 
         if [[ -z "$efi_part_num" ]]; then
-            # Create EFI partition if no ESP flag is found
+            # No existing EFI partition found - create a 512MB EFI partition
             local efi_end=$((start + 512))
             parted -s "$disk" unit MiB mkpart primary fat32 "${start}MiB" "${efi_end}MiB"
             
-            # Sync kernel block devices before setting flags
-            partprobe "$disk" 2>/dev/null || true
-            udevadm settle 2>/dev/null || true
+            partprobe "$disk" 2>/dev/null || udevadm settle 2>/dev/null || true
+            sleep 1
 
-            efi_part_num=$(parted -s "$disk" print | awk '/^[0-9]+/ {print $1}' | tail -1)
-            parted -s "$disk" set "$efi_part_num" esp on
-            
-            start=$efi_end
+            efi_part_num=$(parted -s "$disk" print 2>/dev/null | awk '/^[0-9]+/ {print $1}' | tail -1)
             EFI_PARTITION=$(get_part_path "$disk" "$efi_part_num")
+            start=$efi_end
         else
+            # Reuse existing EFI partition on drive
             EFI_PARTITION=$(get_part_path "$disk" "$efi_part_num")
         fi
 
         # Create root partition in remaining space
         parted -s "$disk" unit MiB mkpart primary btrfs "${start}MiB" 100%
     else
-        # BIOS/MBR Mode
+        # BIOS Mode - Create single root partition without requiring flag changes
         parted -s "$disk" unit MiB mkpart primary btrfs "${start}MiB" 100%
-        
-        # Sync kernel block devices before setting boot flag
-        partprobe "$disk" 2>/dev/null || true
-        udevadm settle 2>/dev/null || true
-
-        local root_part_num=""
-        root_part_num=$(parted -s "$disk" print | awk '/^[0-9]+/ {print $1}' | tail -1)
-        parted -s "$disk" set "$root_part_num" boot on
     fi
 
-    # Final kernel sync to populate new partition nodes under /dev/
-    partprobe "$disk" 2>/dev/null || true
-    udevadm settle 2>/dev/null || true
-    sleep 1
+    # Sync kernel block device node paths
+    partprobe "$disk" 2>/dev/null || udevadm settle 2>/dev/null || true
+    sleep 2
 
+    # Get the newly created root partition number
     local final_root_num=""
-    final_root_num=$(parted -s "$disk" print | awk '/^[0-9]+/ {print $1}' | tail -1)
+    final_root_num=$(parted -s "$disk" print 2>/dev/null | awk '/^[0-9]+/ {print $1}' | tail -1)
     ROOT_PARTITION=$(get_part_path "$disk" "$final_root_num")
 }
 
