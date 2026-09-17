@@ -836,15 +836,10 @@ partition_free_space() {
 
     dialog --infobox "Re-scanning disk structure on $disk..." 5 50
 
-    # Force kernel to re-read partition table boundaries
     partprobe "$disk" 2>/dev/null || true
     udevadm settle 2>/dev/null || true
 
-    # Force parted to fix GPT backup header if end-of-disk space changed
-    parted -s "$disk" print >/dev/null 2>&1
-
     # Get the last free space block details in MiB
-    # Format line: " 12288MiB 15360MiB 3072MiB Free Space"
     local free_line=""
     free_line=$(parted -s "$disk" unit MiB print free 2>/dev/null | grep -i "free space" | tail -1)
 
@@ -856,7 +851,6 @@ partition_free_space() {
     local clean_line=""
     clean_line=$(echo "$free_line" | tr -s ' ')
 
-    # Extract Start (col 1) and Size (col 3) from the free space line
     local start=""
     local size=""
     start=$(echo "$clean_line" | grep -oE '[0-9]+(\.[0-9]+)?MiB' | head -1 | sed 's/MiB//')
@@ -864,15 +858,11 @@ partition_free_space() {
 
     start="${start%.*}"
     size="${size%.*}"
-
     start="${start:-0}"
     size="${size:-0}"
 
-    # Set minimum required space to 2000 MiB (2 GB)
-    local min_required_mib=2000
-
-    if [[ "$size" -lt "$min_required_mib" ]]; then
-        dialog --msgbox "Insufficient free space found on $disk!\n\nFound: ${size}MB\nRequired: ${min_required_mib}MB\n\nPlease select a different disk or use full disk option." 10 60
+    if [[ "$size" -lt 2000 ]]; then
+        dialog --msgbox "Insufficient free space found on $disk!\n\nFound: ${size}MB\nRequired: 2000MB\n\nPlease select a different disk or use full disk option." 10 60
         exit 1
     fi
 
@@ -894,27 +884,42 @@ partition_free_space() {
         efi_part_num="${efi_part_num:-}"
 
         if [[ -z "$efi_part_num" ]]; then
+            # Create EFI partition if no ESP flag is found
             local efi_end=$((start + 512))
             parted -s "$disk" unit MiB mkpart primary fat32 "${start}MiB" "${efi_end}MiB"
+            
+            # Sync kernel block devices before setting flags
+            partprobe "$disk" 2>/dev/null || true
+            udevadm settle 2>/dev/null || true
+
             efi_part_num=$(parted -s "$disk" print | awk '/^[0-9]+/ {print $1}' | tail -1)
             parted -s "$disk" set "$efi_part_num" esp on
+            
             start=$efi_end
-
             EFI_PARTITION=$(get_part_path "$disk" "$efi_part_num")
         else
             EFI_PARTITION=$(get_part_path "$disk" "$efi_part_num")
         fi
 
+        # Create root partition in remaining space
         parted -s "$disk" unit MiB mkpart primary btrfs "${start}MiB" 100%
     else
+        # BIOS/MBR Mode
         parted -s "$disk" unit MiB mkpart primary btrfs "${start}MiB" 100%
+        
+        # Sync kernel block devices before setting boot flag
+        partprobe "$disk" 2>/dev/null || true
+        udevadm settle 2>/dev/null || true
+
         local root_part_num=""
         root_part_num=$(parted -s "$disk" print | awk '/^[0-9]+/ {print $1}' | tail -1)
         parted -s "$disk" set "$root_part_num" boot on
     fi
 
-    partprobe "$disk" 2>/dev/null || udevadm settle 2>/dev/null || true
-    sleep 2
+    # Final kernel sync to populate new partition nodes under /dev/
+    partprobe "$disk" 2>/dev/null || true
+    udevadm settle 2>/dev/null || true
+    sleep 1
 
     local final_root_num=""
     final_root_num=$(parted -s "$disk" print | awk '/^[0-9]+/ {print $1}' | tail -1)
