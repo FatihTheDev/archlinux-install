@@ -836,32 +836,44 @@ partition_free_space() {
 
     dialog --infobox "Checking for free space on $disk..." 5 50
 
-    # Force unit to MiB explicitly to get reliable numbers
-    # Extract line ending with "Free Space", then grab the Start (col 1) and End (col 2)
-    local free_line
-    free_line=$(parted -s "$disk" unit MiB print free | grep "Free Space" | tail -1)
+    # Ensure disk changes are read by kernel first
+    partprobe "$disk" 2>/dev/null || true
+    udevadm settle 2>/dev/null || true
+
+    # Extract the last Free Space block from parted in MiB
+    # Format: " 1  1024MiB  4096MiB  3072MiB  Free Space"
+    local free_line=""
+    free_line=$(parted -s "$disk" unit MiB print free 2>/dev/null | grep -i "free space" | tail -1)
 
     if [[ -z "$free_line" ]]; then
         dialog --msgbox "No free space found on $disk!\n\nPlease select a different disk or use full disk option." 10 60
         exit 1
     fi
 
-    # Read start and end directly from the last two values before 'Free Space'
-    local start
-    local end
-    start=$(echo "$free_line" | awk '{print $(NF-2)}' | sed 's/MiB//')
-    end=$(echo "$free_line" | awk '{print $(NF-1)}' | sed 's/MiB//')
+    # Clean up line to single-space separated tokens
+    local clean_line=""
+    clean_line=$(echo "$free_line" | tr -s ' ')
 
-    # Convert floating point values to integers if parted returned decimals
-    start=${start%.*}
-    end=${end%.*}
+    # Safely extract Start and End coordinates using regex
+    # Matches the numbers preceding 'MiB'
+    local start=""
+    local end=""
+    start=$(echo "$clean_line" | grep -oE '[0-9]+(\.[0-9]+)?MiB' | head -1 | sed 's/MiB//')
+    end=$(echo "$clean_line" | grep -oE '[0-9]+(\.[0-9]+)?MiB' | head -2 | tail -1 | sed 's/MiB//')
 
-    if [[ -z "$start" ]] || [[ -z "$end" ]] || [[ "$start" -ge "$end" ]]; then
+    # Convert floating point values to integers safely
+    start="${start%.*}"
+    end="${end%.*}"
+
+    # Fallback default checks for set -u
+    start="${start:-0}"
+    end="${end:-0}"
+
+    if [[ "$start" -eq 0 && "$end" -eq 0 ]] || [[ "$start" -ge "$end" ]]; then
         dialog --msgbox "No sufficient free space found on $disk!\n\nPlease select a different disk or use full disk option." 10 60
         exit 1
     fi
 
-    # Helper function to get partition block device paths accurately (handles vda, nvme, sda, mmcblk)
     get_part_path() {
         local dev="$1"
         local num="$2"
@@ -874,14 +886,12 @@ partition_free_space() {
 
     dialog --infobox "Creating partition in free space..." 5 50
 
-    # Create partition in free space
     if is_uefi; then
-        # Check if an existing EFI System Partition exists
-        local efi_part_num
-        efi_part_num=$(parted -s "$disk" print | awk '/esp/ {print $1}' | head -1)
+        local efi_part_num=""
+        efi_part_num=$(parted -s "$disk" print 2>/dev/null | awk '/esp/ {print $1}' | head -1)
+        efi_part_num="${efi_part_num:-}"
 
         if [[ -z "$efi_part_num" ]]; then
-            # Create a new EFI partition (512MB)
             local efi_end=$((start + 512))
             if [[ $efi_end -lt $end ]]; then
                 parted -s "$disk" unit MiB mkpart primary fat32 "${start}MiB" "${efi_end}MiB"
@@ -895,21 +905,18 @@ partition_free_space() {
             EFI_PARTITION=$(get_part_path "$disk" "$efi_part_num")
         fi
 
-        # Create root partition in the remaining free space
         parted -s "$disk" unit MiB mkpart primary btrfs "${start}MiB" "${end}MiB"
     else
         parted -s "$disk" unit MiB mkpart primary btrfs "${start}MiB" "${end}MiB"
-        local root_part_num
+        local root_part_num=""
         root_part_num=$(parted -s "$disk" print | awk '/^[0-9]+/ {print $1}' | tail -1)
         parted -s "$disk" set "$root_part_num" boot on
     fi
 
-    # Inform kernel of partition changes
-    partprobe "$disk" 2>/dev/null || udevadm settle
+    partprobe "$disk" 2>/dev/null || udevadm settle 2>/dev/null || true
     sleep 2
 
-    # Set root partition variable
-    local final_root_num
+    local final_root_num=""
     final_root_num=$(parted -s "$disk" print | awk '/^[0-9]+/ {print $1}' | tail -1)
     ROOT_PARTITION=$(get_part_path "$disk" "$final_root_num")
 }
