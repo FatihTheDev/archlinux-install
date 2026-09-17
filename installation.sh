@@ -834,12 +834,17 @@ partition_full_disk() {
 partition_free_space() {
     local disk="/dev/$INSTALL_DISK"
 
-    dialog --infobox "Checking for free space on $disk..." 5 50
+    dialog --infobox "Re-scanning disk structure on $disk..." 5 50
 
+    # Force kernel to re-read partition table boundaries
     partprobe "$disk" 2>/dev/null || true
     udevadm settle 2>/dev/null || true
 
-    # Extract the last Free Space block from parted in MiB
+    # Force parted to fix GPT backup header if end-of-disk space changed
+    parted -s "$disk" print >/dev/null 2>&1
+
+    # Get the last free space block details in MiB
+    # Format line: " 12288MiB 15360MiB 3072MiB Free Space"
     local free_line=""
     free_line=$(parted -s "$disk" unit MiB print free 2>/dev/null | grep -i "free space" | tail -1)
 
@@ -851,15 +856,23 @@ partition_free_space() {
     local clean_line=""
     clean_line=$(echo "$free_line" | tr -s ' ')
 
-    # Extract Start value only (End value is safely replaced by 100%)
+    # Extract Start (col 1) and Size (col 3) from the free space line
     local start=""
+    local size=""
     start=$(echo "$clean_line" | grep -oE '[0-9]+(\.[0-9]+)?MiB' | head -1 | sed 's/MiB//')
+    size=$(echo "$clean_line" | grep -oE '[0-9]+(\.[0-9]+)?MiB' | tail -1 | sed 's/MiB//')
 
     start="${start%.*}"
-    start="${start:-0}"
+    size="${size%.*}"
 
-    if [[ "$start" -eq 0 ]]; then
-        dialog --msgbox "No sufficient free space found on $disk!\n\nPlease select a different disk or use full disk option." 10 60
+    start="${start:-0}"
+    size="${size:-0}"
+
+    # Set minimum required space to 2000 MiB (2 GB)
+    local min_required_mib=2000
+
+    if [[ "$size" -lt "$min_required_mib" ]]; then
+        dialog --msgbox "Insufficient free space found on $disk!\n\nFound: ${size}MB\nRequired: ${min_required_mib}MB\n\nPlease select a different disk or use full disk option." 10 60
         exit 1
     fi
 
@@ -873,7 +886,7 @@ partition_free_space() {
         fi
     }
 
-    dialog --infobox "Creating partition in free space..." 5 50
+    dialog --infobox "Creating partition in free space ($size MiB available)..." 5 50
 
     if is_uefi; then
         local efi_part_num=""
@@ -881,30 +894,19 @@ partition_free_space() {
         efi_part_num="${efi_part_num:-}"
 
         if [[ -z "$efi_part_num" ]]; then
-            # Get total disk size in MiB to verify space for 512MB EFI
-            local total_disk_mib=""
-            total_disk_mib=$(parted -s "$disk" unit MiB print 2>/dev/null | grep -i "Disk $disk" | grep -oE '[0-9]+' | head -1)
-            total_disk_mib="${total_disk_mib:-0}"
-
             local efi_end=$((start + 512))
-            
-            # Ensure there's space for EFI + Root
-            if [[ $efi_end -lt $total_disk_mib ]]; then
-                parted -s "$disk" unit MiB mkpart primary fat32 "${start}MiB" "${efi_end}MiB"
-                efi_part_num=$(parted -s "$disk" print | awk '/^[0-9]+/ {print $1}' | tail -1)
-                parted -s "$disk" set "$efi_part_num" esp on
-                start=$efi_end
+            parted -s "$disk" unit MiB mkpart primary fat32 "${start}MiB" "${efi_end}MiB"
+            efi_part_num=$(parted -s "$disk" print | awk '/^[0-9]+/ {print $1}' | tail -1)
+            parted -s "$disk" set "$efi_part_num" esp on
+            start=$efi_end
 
-                EFI_PARTITION=$(get_part_path "$disk" "$efi_part_num")
-            fi
+            EFI_PARTITION=$(get_part_path "$disk" "$efi_part_num")
         else
             EFI_PARTITION=$(get_part_path "$disk" "$efi_part_num")
         fi
 
-        # Use 100% instead of calculated numeric end to avoid off-by-one errors
         parted -s "$disk" unit MiB mkpart primary btrfs "${start}MiB" 100%
     else
-        # Use 100% for BIOS root partition
         parted -s "$disk" unit MiB mkpart primary btrfs "${start}MiB" 100%
         local root_part_num=""
         root_part_num=$(parted -s "$disk" print | awk '/^[0-9]+/ {print $1}' | tail -1)
