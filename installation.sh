@@ -836,71 +836,82 @@ partition_free_space() {
 
     dialog --infobox "Checking for free space on $disk..." 5 50
 
-    # Get free space information
-    local free_info=$(parted -s "$disk" print free | grep "Free Space" | tail -1)
+    # Force unit to MiB explicitly to get reliable numbers
+    # Extract line ending with "Free Space", then grab the Start (col 1) and End (col 2)
+    local free_line
+    free_line=$(parted -s "$disk" unit MiB print free | grep "Free Space" | tail -1)
 
-    if [[ -z "$free_info" ]]; then
+    if [[ -z "$free_line" ]]; then
         dialog --msgbox "No free space found on $disk!\n\nPlease select a different disk or use full disk option." 10 60
         exit 1
     fi
 
-    # Extract start and end from free space (format: "Free Space  1024MiB  2048MiB")
-    local start=$(echo "$free_info" | awk '{print $3}' | sed 's/MiB//')
-    local end=$(echo "$free_info" | awk '{print $4}' | sed 's/MiB//')
+    # Read start and end directly from the last two values before 'Free Space'
+    local start
+    local end
+    start=$(echo "$free_line" | awk '{print $(NF-2)}' | sed 's/MiB//')
+    end=$(echo "$free_line" | awk '{print $(NF-1)}' | sed 's/MiB//')
 
-    if [[ -z "$start" ]] || [[ -z "$end" ]] || [[ "$start" == "$end" ]]; then
+    # Convert floating point values to integers if parted returned decimals
+    start=${start%.*}
+    end=${end%.*}
+
+    if [[ -z "$start" ]] || [[ -z "$end" ]] || [[ "$start" -ge "$end" ]]; then
         dialog --msgbox "No sufficient free space found on $disk!\n\nPlease select a different disk or use full disk option." 10 60
         exit 1
     fi
+
+    # Helper function to get partition block device paths accurately (handles vda, nvme, sda, mmcblk)
+    get_part_path() {
+        local dev="$1"
+        local num="$2"
+        if [[ "$dev" =~ (nvme|mmcblk) ]]; then
+            echo "${dev}p${num}"
+        else
+            echo "${dev}${num}"
+        fi
+    }
 
     dialog --infobox "Creating partition in free space..." 5 50
 
     # Create partition in free space
     if is_uefi; then
-        # Check if EFI partition exists
-        local efi_exists=$(parted -s "$disk" print | grep -c "esp" || true)
-        if [[ "$efi_exists" -eq 0 ]]; then
-            # Check if we have enough space for EFI partition (512MB)
+        # Check if an existing EFI System Partition exists
+        local efi_part_num
+        efi_part_num=$(parted -s "$disk" print | awk '/esp/ {print $1}' | head -1)
+
+        if [[ -z "$efi_part_num" ]]; then
+            # Create a new EFI partition (512MB)
             local efi_end=$((start + 512))
             if [[ $efi_end -lt $end ]]; then
-                parted -s "$disk" mkpart primary fat32 "${start}MiB" "${efi_end}MiB"
-                local efi_part_num=$(parted -s "$disk" print | grep -v "^$" | tail -1 | awk '{print $1}')
+                parted -s "$disk" unit MiB mkpart primary fat32 "${start}MiB" "${efi_end}MiB"
+                efi_part_num=$(parted -s "$disk" print | awk '/^[0-9]+/ {print $1}' | tail -1)
                 parted -s "$disk" set "$efi_part_num" esp on
                 start=$efi_end
 
-                # Set EFI partition path
-                if [[ "$INSTALL_DISK" =~ ^nvme ]]; then
-                    EFI_PARTITION="${disk}p${efi_part_num}"
-                else
-                    EFI_PARTITION="${disk}${efi_part_num}"
-                fi
+                EFI_PARTITION=$(get_part_path "$disk" "$efi_part_num")
             fi
         else
-            # Find existing EFI partition
-            local efi_part_num=$(parted -s "$disk" print | grep "esp" | awk '{print $1}')
-            if [[ "$INSTALL_DISK" =~ ^nvme ]]; then
-                EFI_PARTITION="${disk}p${efi_part_num}"
-            else
-                EFI_PARTITION="${disk}${efi_part_num}"
-            fi
+            EFI_PARTITION=$(get_part_path "$disk" "$efi_part_num")
         fi
-        # Create root partition
-        parted -s "$disk" mkpart primary btrfs "${start}MiB" "${end}MiB"
+
+        # Create root partition in the remaining free space
+        parted -s "$disk" unit MiB mkpart primary btrfs "${start}MiB" "${end}MiB"
     else
-        parted -s "$disk" mkpart primary btrfs "${start}MiB" "${end}MiB"
-        local root_part_num=$(parted -s "$disk" print | tail -1 | awk '{print $1}')
+        parted -s "$disk" unit MiB mkpart primary btrfs "${start}MiB" "${end}MiB"
+        local root_part_num
+        root_part_num=$(parted -s "$disk" print | awk '/^[0-9]+/ {print $1}' | tail -1)
         parted -s "$disk" set "$root_part_num" boot on
     fi
 
+    # Inform kernel of partition changes
+    partprobe "$disk" 2>/dev/null || udevadm settle
     sleep 2
 
     # Set root partition variable
-    local root_part_num=$(parted -s "$disk" print | grep -v "^$" | tail -1 | awk '{print $1}')
-    if [[ "$INSTALL_DISK" =~ ^nvme ]]; then
-        ROOT_PARTITION="${disk}p${root_part_num}"
-    else
-        ROOT_PARTITION="${disk}${root_part_num}"
-    fi
+    local final_root_num
+    final_root_num=$(parted -s "$disk" print | awk '/^[0-9]+/ {print $1}' | tail -1)
+    ROOT_PARTITION=$(get_part_path "$disk" "$final_root_num")
 }
 
 # Partition disk - manual
