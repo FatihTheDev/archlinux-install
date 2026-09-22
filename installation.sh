@@ -839,7 +839,6 @@ partition_free_space() {
     partprobe "$disk" 2>/dev/null || true
     udevadm settle 2>/dev/null || true
 
-    # Extract the last Free Space block from parted in MiB
     local free_line=""
     free_line=$(parted -s "$disk" unit MiB print free 2>/dev/null | grep -i "free space" | tail -1)
 
@@ -878,10 +877,12 @@ partition_free_space() {
 
     dialog --infobox "Creating partition in free space ($size MiB available)..." 5 50
 
+    # Explicit flag so format_partitions knows whether to run mkfs.fat
+    NEW_EFI_CREATED=false
+
     if is_uefi; then
         local efi_part_num=""
         efi_part_num=$(parted -s "$disk" print 2>/dev/null | awk '/esp/ {print $1}' | head -1)
-        efi_part_num="${efi_part_num:-}"
 
         if [[ -z "$efi_part_num" ]]; then
             # No existing EFI partition found - create a 512MB EFI partition
@@ -891,26 +892,27 @@ partition_free_space() {
             partprobe "$disk" 2>/dev/null || udevadm settle 2>/dev/null || true
             sleep 1
 
+            # Get exact partition number created at the end
             efi_part_num=$(parted -s "$disk" print 2>/dev/null | awk '/^[0-9]+/ {print $1}' | tail -1)
             EFI_PARTITION=$(get_part_path "$disk" "$efi_part_num")
             start=$efi_end
+            NEW_EFI_CREATED=true
         else
             # Reuse existing EFI partition on drive
             EFI_PARTITION=$(get_part_path "$disk" "$efi_part_num")
+            NEW_EFI_CREATED=false
         fi
 
         # Create root partition in remaining space
         parted -s "$disk" unit MiB mkpart primary btrfs "${start}MiB" 100%
     else
-        # BIOS Mode - Create single root partition without requiring flag changes
+        # BIOS Mode
         parted -s "$disk" unit MiB mkpart primary btrfs "${start}MiB" 100%
     fi
 
-    # Sync kernel block device node paths
     partprobe "$disk" 2>/dev/null || udevadm settle 2>/dev/null || true
     sleep 2
 
-    # Get the newly created root partition number
     local final_root_num=""
     final_root_num=$(parted -s "$disk" print 2>/dev/null | awk '/^[0-9]+/ {print $1}' | tail -1)
     ROOT_PARTITION=$(get_part_path "$disk" "$final_root_num")
@@ -969,8 +971,8 @@ partition_manual() {
 format_partitions() {
     dialog --infobox "Formatting partitions..." 5 50
 
-    # Format EFI partition if UEFI
-    if is_uefi && [[ -n "$EFI_PARTITION" ]]; then
+    # ONLY format EFI partition if we newly created it.
+    if is_uefi && [[ -n "$EFI_PARTITION" ]] && [[ "$NEW_EFI_CREATED" == true ]]; then
         mkfs.fat -F32 "$EFI_PARTITION"
     fi
 
