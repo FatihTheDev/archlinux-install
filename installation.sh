@@ -1041,6 +1041,11 @@ install_base() {
     while [[ $attempt -le $max_attempts ]]; do
         if [[ $attempt -gt 1 ]]; then
             dialog --infobox "Retrying installation (attempt $attempt of $max_attempts). Updating mirror list..." 6 60
+
+            # Clean up lockfiles and corrupted partial downloads on target mount point
+            rm -f "${MOUNT_POINT}/var/lib/pacman/db.lck" 2>/dev/null || true
+            rm -rf "${MOUNT_POINT}/var/cache/pacman/pkg/"* 2>/dev/null || true
+            
             local country_list
             country_list=$(IFS=','; echo "${SELECTED_COUNTRIES[*]}")
             reflector --country "$country_list" --protocol https --latest 10 --fastest 5 --sort rate --save /etc/pacman.d/mirrorlist 2>/dev/null || true
