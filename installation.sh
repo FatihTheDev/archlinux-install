@@ -1009,11 +1009,34 @@ format_partitions() {
     fi
 }
 
+apply_temp_pacman_timeouts() {
+    local conf="/etc/pacman.conf"
+
+    # 1. Enable ParallelDownloads on live ISO if commented out (speeds up pacstrap)
+    sed -i 's/^#\s*\(ParallelDownloads\s*=\s*[0-9]*\)/\1/' "$conf"
+
+    # 2. Add or update dynamic network timeout settings in [options]
+    # Set maximum download timeout to 600 seconds per package (prevents dropping big packages)
+    if grep -q "^#\?DownloadTimeout" "$conf"; then
+        sed -i 's/^#\?DownloadTimeout.*/DownloadTimeout = 600/' "$conf"
+    else
+        sed -i '/^\[options\]/a DownloadTimeout = 600' "$conf"
+    fi
+
+    # Set connection timeout to 30 seconds
+    if grep -q "^#\?ConnectTimeout" "$conf"; then
+        sed -i 's/^#\?ConnectTimeout.*/ConnectTimeout = 30/' "$conf"
+    else
+        sed -i '/^\[options\]/a ConnectTimeout = 30' "$conf"
+    fi
+}
+
 # Install base system
 install_base() {
     local max_attempts=3
     local attempt=1
 
+    apply_temp_pacman_timeouts
 
     while [[ $attempt -le $max_attempts ]]; do
         if [[ $attempt -gt 1 ]]; then
