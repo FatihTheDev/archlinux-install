@@ -839,29 +839,33 @@ partition_free_space() {
     partprobe "$disk" 2>/dev/null || true
     udevadm settle 2>/dev/null || true
 
+    # Grab the last Free Space line from parted using machine-readable output (colon separated)
     local free_line=""
-    free_line=$(parted -s "$disk" unit MiB print free 2>/dev/null | grep -i "free space" | tail -1)
+    free_line=$(parted -s "$disk" -m unit MiB print free 2>/dev/null | grep -i "free;" | tail -1)
 
     if [[ -z "$free_line" ]]; then
         dialog --msgbox "No free space found on $disk!\n\nPlease select a different disk or use full disk option." 10 60
         exit 1
     fi
 
-    local clean_line=""
-    clean_line=$(echo "$free_line" | tr -s ' ')
+    # Machine readable output format: number:start:end:size:type...
+    # Example: 2:10500MiB:15360MiB:4860MiB:free;
+    IFS=':' read -r _ start_raw end_raw size_raw _ <<< "$free_line"
 
-    local start=""
-    local size=""
-    start=$(echo "$clean_line" | grep -oE '[0-9]+(\.[0-9]+)?MiB' | head -1 | sed 's/MiB//')
-    size=$(echo "$clean_line" | grep -oE '[0-9]+(\.[0-9]+)?MiB' | tail -1 | sed 's/MiB//')
-
+    # Strip 'MiB' suffix and decimal points
+    local start="${start_raw//MiB/}"
+    local size="${size_raw//MiB/}"
     start="${start%.*}"
     size="${size%.*}"
-    start="${start:-0}"
-    size="${size:-0}"
 
-    if [[ "$size" -lt 2000 ]]; then
-        dialog --msgbox "Insufficient free space found on $disk!\n\nFound: ${size}MB\nRequired: 2000MB\n\nPlease select a different disk or use full disk option." 10 60
+    # FAILSAFE: If start is empty, 0, or invalid, STOP IMMEDIATELY before harming disk
+    if [[ -z "$start" ]] || [[ "$start" -eq 0 ]]; then
+        dialog --msgbox "CRITICAL ERROR: Failed to determine unallocated space start boundary (parsed start: '${start_raw}').\n\nAborting to prevent wiping existing OS." 10 65
+        exit 1
+    fi
+
+    if [[ -z "$size" ]] || [[ "$size" -lt 2000 ]]; then
+        dialog --msgbox "Insufficient free space found on $disk!\n\nFound: ${size:-0}MB\nRequired: 2000MB\n\nPlease select a different disk or use full disk option." 10 60
         exit 1
     fi
 
@@ -875,25 +879,25 @@ partition_free_space() {
         fi
     }
 
-    dialog --infobox "Creating partition in free space ($size MiB available)..." 5 50
+    dialog --infobox "Creating partition in free space ($size MiB available, starting at ${start}MiB)..." 5 50
 
-    # Explicit flag so format_partitions knows whether to run mkfs.fat
     NEW_EFI_CREATED=false
 
     if is_uefi; then
         local efi_part_num=""
-        efi_part_num=$(parted -s "$disk" print 2>/dev/null | awk '/esp/ {print $1}' | head -1)
+        # Search for esp/boot flag partition
+        efi_part_num=$(parted -s "$disk" -m print 2>/dev/null | grep -E 'esp|boot' | cut -d: -f1 | head -1)
 
         if [[ -z "$efi_part_num" ]]; then
             # No existing EFI partition found - create a 512MB EFI partition
             local efi_end=$((start + 512))
             parted -s "$disk" unit MiB mkpart primary fat32 "${start}MiB" "${efi_end}MiB"
+            parted -s "$disk" set 1 esp on 2>/dev/null || true
             
             partprobe "$disk" 2>/dev/null || udevadm settle 2>/dev/null || true
             sleep 1
 
-            # Get exact partition number created at the end
-            efi_part_num=$(parted -s "$disk" print 2>/dev/null | awk '/^[0-9]+/ {print $1}' | tail -1)
+            efi_part_num=$(parted -s "$disk" -m print 2>/dev/null | grep -v '^BYT' | cut -d: -f1 | tail -1)
             EFI_PARTITION=$(get_part_path "$disk" "$efi_part_num")
             start=$efi_end
             NEW_EFI_CREATED=true
@@ -914,8 +918,14 @@ partition_free_space() {
     sleep 2
 
     local final_root_num=""
-    final_root_num=$(parted -s "$disk" print 2>/dev/null | awk '/^[0-9]+/ {print $1}' | tail -1)
+    final_root_num=$(parted -s "$disk" -m print 2>/dev/null | grep -v '^BYT' | cut -d: -f1 | tail -1)
     ROOT_PARTITION=$(get_part_path "$disk" "$final_root_num")
+
+    # SAFETY CHECK: Ensure ROOT_PARTITION is valid and NOT the parent disk device
+    if [[ "$ROOT_PARTITION" == "/dev/$INSTALL_DISK" ]] || [[ -z "$ROOT_PARTITION" ]]; then
+        dialog --msgbox "FATAL ERROR: ROOT_PARTITION ($ROOT_PARTITION) resolved to raw disk!\n\nAborting script." 10 65
+        exit 1
+    fi
 }
 
 # Partition disk - manual
